@@ -32,6 +32,24 @@ RUN sed -i \
     -e "s|'gfx942' or 'gfx950'|'gfx942', 'gfx950', or 'gfx1151'|" \
     sgl-kernel/setup_rocm.py
 
+# Patch 1b — fix host/device WARP_SIZE mismatch in topk softmax/sigmoid sgl-kernels.
+# Without an explicit definition, HIP's WARP_SIZE evaluates to different values
+# on host vs device when targeting gfx1151 (wave32). This causes
+# __launch_bounds__(WARPS*WARP_SIZE) to be compiled for 128 threads but launched
+# with 256, raising hipErrorLaunchFailure and a downstream GPU page fault on the
+# first MoE forward. The sibling moe_fused_gate.cu already hardcodes WARP_SIZE=32;
+# replicate the same fix in the topk kernels. See patches/04-warp-size-wave32.md.
+RUN for f in sgl-kernel/csrc/moe/moe_topk_softmax_kernels.cu sgl-kernel/csrc/moe/moe_topk_sigmoid_kernels.cu; do \
+      python3 -c "import sys, re; p=sys.argv[1]; t=open(p).read(); marker='// added: gfx1151 wave32 kStrixWarp'; \
+        assert marker not in t, f'already patched: {p}'; \
+        anchor='#include <torch/all.h>'; \
+        assert anchor in t, f'anchor not found: {p}'; \
+        # Rename WARP_SIZE -> kStrixWarp throughout the file so a HIP macro cannot shadow it. \
+        t=re.sub(r'\bWARP_SIZE\b', 'kStrixWarp', t); \
+        t=t.replace(anchor, anchor+'\n\n'+marker+'\nstatic constexpr int kStrixWarp = 32;', 1); \
+        open(p,'w').write(t); print('patched', p)" "$f"; \
+    done
+
 # Patch 2 — RMSNorm native fallback on gfx1151 (see patches/02-layernorm-native-fallback.md).
 RUN python3 - <<'PYEOF'
 p = '/sgl-workspace/sglang/python/sglang/srt/layers/layernorm.py'
@@ -59,8 +77,9 @@ open(p, 'w').write(t.replace(old, new))
 PYEOF
 
 # Patch 3 — AWQ MoE Triton dispatcher on ROCm (see patches/03-awq-moe-triton-dispatch.md).
-# Loaded only when SGLANG_AWQ_MOE_TRITON_ROCM=1; defaults off because the underlying
-# fused_moe_kernel_gptq_awq currently page-faults on gfx1151 (see docs/AWQ_MOE_DEBUG.md).
+# Loaded only when SGLANG_AWQ_MOE_TRITON_ROCM=1; defaults off until the repack
+# helper below is validated end-to-end on hardware.
+COPY patches/awq_moe_rocm_repack.py /sgl-workspace/sglang/python/sglang/srt/layers/quantization/awq/schemes/awq_moe_rocm_repack.py
 RUN python3 - <<'PYEOF'
 p = '/sgl-workspace/sglang/python/sglang/srt/layers/quantization/awq/schemes/awq_moe.py'
 t = open(p).read()
@@ -83,6 +102,19 @@ t = t.replace(
         self.kernel.process_weights_after_loading(layer)''',
     '''    def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
         if self._rocm_triton:
+            from .awq_moe_rocm_repack import repack_awq_moe_to_triton
+            qw13, qz13, sc13 = repack_awq_moe_to_triton(
+                layer.w13_qweight, layer.w13_qzeros, layer.w13_scales,
+            )
+            qw2, qz2, sc2 = repack_awq_moe_to_triton(
+                layer.w2_qweight, layer.w2_qzeros, layer.w2_scales,
+            )
+            layer.w13_qweight = torch.nn.Parameter(qw13, requires_grad=False)
+            layer.w13_qzeros  = torch.nn.Parameter(qz13, requires_grad=False)
+            layer.w13_scales  = torch.nn.Parameter(sc13, requires_grad=False)
+            layer.w2_qweight  = torch.nn.Parameter(qw2,  requires_grad=False)
+            layer.w2_qzeros   = torch.nn.Parameter(qz2,  requires_grad=False)
+            layer.w2_scales   = torch.nn.Parameter(sc2,  requires_grad=False)
             return
         self.kernel.process_weights_after_loading(layer)''',
 )
@@ -113,7 +145,7 @@ t = t.replace(
                 w2_scale=layer.w2_scales,
                 w13_zp=layer.w13_qzeros,
                 w2_zp=layer.w2_qzeros,
-                block_shape=[self.quant_config.group_size, self.quant_config.group_size],
+                block_shape=[0, self.quant_config.group_size],
             )
             return self.kernel.runner.run(dispatch_output, quant_info)
         return self.kernel.apply(layer, dispatch_output)''',

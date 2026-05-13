@@ -11,9 +11,9 @@ AMD's official `rocm/sgl-dev` images only target MI300/MI350 data-center GPUs. T
 | Server starts, loads model | ✅ |
 | Chat completion, tool calling | ✅ |
 | RadixAttention prefix caching | ✅ |
-| Continuous batching | ✅ — **12.7× Ollama at 8 concurrent streams** |
+| Continuous batching | ✅ — **17.4× Ollama at 8 concurrent streams** |
 | Single-stream decode | ⚠️ ~60% of Ollama (no aiter Flash Attention on RDNA 3.5 yet) |
-| AWQ-MoE inference | ❌ GPU page fault in `fused_moe_kernel_gptq_awq` — see [docs/AWQ_MOE_DEBUG.md](docs/AWQ_MOE_DEBUG.md) |
+| AWQ-MoE inference | ✅ — Qwen3.5-35B-A3B-AWQ-4bit works end-to-end after [patch 4](patches/04-warp-size-wave32.md) |
 
 Tested on Fedora 43 host, ROCm 7.13 nightly, PyTorch 2.13.
 
@@ -23,7 +23,7 @@ Tested on Fedora 43 host, ROCm 7.13 nightly, PyTorch 2.13.
 |---|:-:|:-:|---:|---|
 | `Qwen/Qwen3-0.6B` | ✅ | ✅ | ~2 GB | Smoke test. Loads in seconds. |
 | `Qwen/Qwen3.5-4B` | ✅ | ✅ | ~10 GB | Reference benchmark. 16.5 tps single-stream, 116 tps at 8 concurrent. |
-| `cyankiwi/Qwen3.5-35B-A3B-AWQ-4bit` | ✅ | ❌ | ~23 GB | Loads cleanly with `SGLANG_AWQ_MOE_TRITON_ROCM=1`; first forward pass page-faults — see [docs/AWQ_MOE_DEBUG.md](docs/AWQ_MOE_DEBUG.md). |
+| `cyankiwi/Qwen3.5-35B-A3B-AWQ-4bit` | ✅ | ✅ | ~23 GB | Mamba+MoE hybrid; needs `--max-total-tokens N --max-mamba-cache-size M` to fit. See [docs/RUNNING_AWQ_MOE.md](docs/RUNNING_AWQ_MOE.md). |
 | `Qwen/Qwen3.5-35B-A3B-GPTQ-Int4` | ❌ | — | — | GPTQ-on-MoE needs the `gptq_marlin` backend, which is NVIDIA-only today. Use the AWQ variant above instead. |
 
 Hardware tested: AMD Ryzen AI Max+ 395 / Radeon 8060S (gfx1151), 61.7 GB GTT. If you've run this on a different Strix Halo SKU please open an issue with results.
@@ -89,15 +89,14 @@ Build takes ~10 min on first run; details in [docs/BUILDING.md](docs/BUILDING.md
 
 ## Patches applied
 
-Three small patches let SGLang run on gfx1151:
+Four small patches let SGLang run on gfx1151:
 
 1. **`sgl-kernel/setup_rocm.py`** — allow `gfx1151` in the arch list (upstream guards against anything but `gfx942`/`gfx950`).
 2. **`sglang/srt/layers/layernorm.py`** — `SGLANG_FORCE_NATIVE_LAYERNORM=1` skips the aiter (CDNA-only inline asm) and vLLM (older 4-arg signature) RMSNorm paths.
-3. **`sglang/srt/layers/quantization/awq/schemes/awq_moe.py`** — `SGLANG_AWQ_MOE_TRITON_ROCM=1` routes AWQ MoE through SGLang's existing Triton `fused_moe_kernel_gptq_awq` instead of NVIDIA Marlin.
+3. **`sglang/srt/layers/quantization/awq/schemes/awq_moe.py`** — `SGLANG_AWQ_MOE_TRITON_ROCM=1` routes AWQ MoE through SGLang's existing Triton path on ROCm.
+4. **`sgl-kernel/csrc/moe/moe_topk_{softmax,sigmoid}_kernels.cu`** — fix host/device `WARP_SIZE` mismatch that caused `hipErrorLaunchFailure` → GPU page fault on the first MoE forward pass for any wave32 (RDNA 3.5) target. **This is the patch that unlocks AWQ-MoE inference on consumer Strix Halo.** Likely upstreamable.
 
-Patches #1 and #2 are baked into the Dockerfile by default. Patch #3 is included but loads only when the env var is set; the kernel page-faults on gfx1151 (see [AWQ_MOE_DEBUG.md](docs/AWQ_MOE_DEBUG.md)).
-
-See [`patches/`](patches/) for the diffs.
+All four are baked into the Dockerfile by default. See [`patches/`](patches/) for the diffs.
 
 ## Benchmarks
 
