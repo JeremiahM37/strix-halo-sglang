@@ -108,4 +108,4 @@ The `strix-halo-toolboxes` ecosystem (notably [kyuz0's vLLM toolbox](https://git
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Apache 2.0. See [LICENSE](LICENSE).
