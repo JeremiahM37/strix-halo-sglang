@@ -10,6 +10,14 @@ ENV SGLANG_FORCE_NATIVE_LAYERNORM=1
 ENV HF_HOME=/root/.cache/huggingface
 ENV PYTORCH_ROCM_ARCH=gfx1151
 
+# Perf flags — measured ~38% throughput uplift on gfx1151 vs disabled defaults.
+# TunableOp autotunes GEMM kernels per-shape; results cached at $PYTORCH_TUNABLEOP_FILENAME.
+# Mount /root/.tunableop as a volume to persist tunings across container restarts.
+ENV PYTORCH_TUNABLEOP_ENABLED=1
+ENV PYTORCH_TUNABLEOP_FILENAME=/root/.tunableop/tunableop_results.csv
+ENV HIP_FORCE_DEV_KERNARG=1
+ENV TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
+
 WORKDIR /sgl-workspace
 
 ARG SGL_REPO=https://github.com/sgl-project/sglang.git

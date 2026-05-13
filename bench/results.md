@@ -4,16 +4,22 @@ All runs on **AMD Ryzen AI Max+ 395 / Radeon 8060S (gfx1151)**, ROCm 7.13 nightl
 
 ## Concurrent throughput — Qwen3.5-4B
 
-Same model on both engines (`qwen3.5:4b` on Ollama, `Qwen/Qwen3.5-4B` on SGLang). 80-token generations, identical prompts.
+Same model on both engines (`qwen3.5:4b` on Ollama, `Qwen/Qwen3.5-4B` on SGLang). 80-token generations, identical prompts. SGLang numbers are warm-cache (TunableOp results already tuned).
 
 | Concurrent streams | Ollama agg tps | strix-halo-sglang agg tps | per-stream tps (SGLang) | SGLang advantage |
 |---:|---:|---:|---:|---:|
-| 1 | 9.0 | 16.7 | 16.7 | 1.85× |
-| 2 | 9.2 | 31.8 | 15.9 | 3.45× |
-| 4 | 9.3 | 62.4 | 15.6 | 6.71× |
-| 8 | 9.2 | 116.7 | 14.6 | **12.7×** |
+| 1 | 9.0 | 23.1 | 23.1 | 2.57× |
+| 4 | 9.3 | 85.8 | 21.4 | 9.23× |
+| 8 | 9.2 | 159.9 | 20.0 | **17.4×** |
 
-**Reading:** Ollama serializes — 8 concurrent streams yield the same aggregate as 1 stream. SGLang's continuous batching keeps per-stream throughput nearly flat (16.7 → 14.6 tps, 12% drop) while aggregate scales near-linearly.
+**Reading:** Ollama serializes — 8 concurrent streams yield the same aggregate as 1 stream. SGLang's continuous batching keeps per-stream throughput nearly flat (23.1 → 20.0 tps, 13% drop) while aggregate scales near-linearly.
+
+### Tuning history (Qwen3.5-4B, 8 concurrent)
+
+| Configuration | agg tps @ 8 | Δ vs baseline |
+|---|---:|---:|
+| Initial (CUDA graphs off, FP16 cast, no env tuning) | 116.7 | — |
+| TunableOp + dev kernarg + AOTriton + native BF16 + CUDA graphs ≤ bs8 | **159.9** | **+37%** |
 
 ## Single-stream decode — Qwen3.5-4B
 

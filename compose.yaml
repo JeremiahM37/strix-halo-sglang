@@ -20,6 +20,7 @@ services:
       SGLANG_FORCE_NATIVE_LAYERNORM: "1"
     volumes:
       - ${HF_CACHE:-~/.cache/huggingface}:/root/.cache/huggingface
+      - ${TUNABLE_DIR:-~/.cache/strix-halo-sglang-tunableop}:/root/.tunableop
     command:
       - python3
       - -m
@@ -36,4 +37,5 @@ services:
       - "${SGLANG_CONTEXT:-8192}"
       - --attention-backend
       - triton
-      - --disable-cuda-graph
+      - --cuda-graph-max-bs
+      - "${SGLANG_CUDA_GRAPH_MAX_BS:-8}"

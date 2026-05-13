@@ -105,12 +105,13 @@ Concurrent throughput on Qwen3.5-4B, same model on both engines:
 
 | Concurrent streams | Ollama (llama.cpp) tps | strix-halo-sglang tps | SGLang advantage |
 |---:|---:|---:|---:|
-| 1 | 9.0 | 16.7 | 1.85× |
-| 2 | 9.2 | 31.8 | 3.45× |
-| 4 | 9.3 | 62.4 | 6.71× |
-| 8 | 9.2 | 116.7 | **12.7×** |
+| 1 | 9.0 | 23.1 | 2.57× |
+| 4 | 9.3 | 85.8 | 9.23× |
+| 8 | 9.2 | 159.9 | **17.4×** |
 
-Ollama serializes; SGLang's continuous batching keeps per-stream throughput nearly flat as concurrency rises. Full script: [`bench/concurrent_throughput.py`](bench/concurrent_throughput.py).
+Ollama serializes; SGLang's continuous batching keeps per-stream throughput nearly flat (23.1 → 20.0 tps from 1 → 8 streams) while aggregate scales near-linearly. Full script: [`bench/concurrent_throughput.py`](bench/concurrent_throughput.py).
+
+The image enables TunableOp (`PYTORCH_TUNABLEOP_ENABLED=1`) by default — first request to each unique GEMM shape autotunes; results persist to a mounted volume at `/root/.tunableop`. Subsequent runs use the cached tunings (warm cache = the numbers above).
 
 ## Known limitations
 
