@@ -17,54 +17,61 @@ import sys
 
 import torch
 
-# Match the most common AWQ MoE shape — Qwen3.5-35B-A3B-class.
-# Adjust if reproducing on a different model.
+# Shapes from Qwen/Qwen3.5-35B-A3B config.json.
 NUM_EXPERTS = 256
 TOP_K = 8
 HIDDEN = 2048
-INTERMEDIATE = 1024
-GROUP_SIZE = 128
-PACK_FACTOR = 8  # 8 int4s packed into one int32
+INTERMEDIATE = 512        # moe_intermediate_size per expert
+GROUP_SIZE = 128          # standard AWQ group size
+PACK_FACTOR = 8           # 8 int4s packed into one int32
 
 
 def make_fake_weights(num_tokens, device="cuda", dtype=torch.bfloat16):
-    """Synthetic packed-int4 weights + scales + zeros + routing."""
-    # Activations (input)
-    a = torch.randn(num_tokens, HIDDEN, device=device, dtype=dtype)
+    """Synthetic packed-int4 weights + scales + zeros + routing.
 
-    # w13: gate+up projection weights, packed
+    Layout matches what fused_moe_kernel_gptq_awq expects (NOT AWQMoEScheme.create_weights):
+        w1: [E, 2*N, K // 2] uint8   — 2 int4 per uint8, K packed
+        w2: [E, K, N // 2] uint8
+        scales: [E, 2*N, K // group_size]
+        zeros:  [E, 2*N // 2, K // group_size]
+    The AWQ-stored layout is different (int32, N packed by 8); SGLang's Marlin
+    path repacks on load. The ROCm Triton path needs analogous repacking.
+    """
+    KERNEL_PACK = 2  # the kernel's pack factor, NOT AWQ's pack_factor=8
+    K = HIDDEN
+    N = INTERMEDIATE
+
+    a = torch.randn(num_tokens, K, device=device, dtype=dtype)
+
     w13 = torch.randint(
-        0, 2**31 - 1,
-        (NUM_EXPERTS, HIDDEN, 2 * INTERMEDIATE // PACK_FACTOR),
-        dtype=torch.int32, device=device,
+        0, 256,
+        (NUM_EXPERTS, 2 * N, K // KERNEL_PACK),
+        dtype=torch.uint8, device=device,
     )
-    # w2: down projection weights, packed
     w2 = torch.randint(
-        0, 2**31 - 1,
-        (NUM_EXPERTS, INTERMEDIATE, HIDDEN // PACK_FACTOR),
-        dtype=torch.int32, device=device,
+        0, 256,
+        (NUM_EXPERTS, K, N // KERNEL_PACK),
+        dtype=torch.uint8, device=device,
     )
 
-    # Per-group scales (one per group along K)
     s13 = torch.randn(
-        NUM_EXPERTS, HIDDEN // GROUP_SIZE, 2 * INTERMEDIATE,
+        NUM_EXPERTS, 2 * N, K // GROUP_SIZE,
         device=device, dtype=dtype,
     ) * 0.01
     s2 = torch.randn(
-        NUM_EXPERTS, INTERMEDIATE // GROUP_SIZE, HIDDEN,
+        NUM_EXPERTS, K, N // GROUP_SIZE,
         device=device, dtype=dtype,
     ) * 0.01
 
-    # Per-group zero points, packed
     z13 = torch.randint(
-        0, 2**31 - 1,
-        (NUM_EXPERTS, HIDDEN // GROUP_SIZE, 2 * INTERMEDIATE // PACK_FACTOR),
-        dtype=torch.int32, device=device,
+        0, 256,
+        (NUM_EXPERTS, 2 * N // KERNEL_PACK, K // GROUP_SIZE),
+        dtype=torch.uint8, device=device,
     )
     z2 = torch.randint(
-        0, 2**31 - 1,
-        (NUM_EXPERTS, INTERMEDIATE // GROUP_SIZE, HIDDEN // PACK_FACTOR),
-        dtype=torch.int32, device=device,
+        0, 256,
+        (NUM_EXPERTS, K // KERNEL_PACK, N // GROUP_SIZE),
+        dtype=torch.uint8, device=device,
     )
 
     # Routing: random expert assignment, all-ones weights
@@ -86,8 +93,10 @@ def run(num_tokens):
     """Call the actual SGLang fused MoE path with use_int4_w4a16=True."""
     try:
         from sglang.srt.layers.moe.moe_runner.triton_utils.fused_moe import (
-            fused_experts,
+            fused_experts_impl,
         )
+        from sglang.srt.server_args import ServerArgs, set_global_server_args_for_scheduler
+        set_global_server_args_for_scheduler(ServerArgs(model_path="dummy"))
     except ImportError as e:
         print(f"FAIL: sglang import — is this running inside the strix-halo-sglang container? ({e})")
         return 1
@@ -100,10 +109,10 @@ def run(num_tokens):
     print(f"  s13:      {tuple(w['s13'].shape)} {w['s13'].dtype}")
     print(f"  topk_ids: {tuple(w['topk_ids'].shape)} {w['topk_ids'].dtype}")
     print()
-    print(f"invoking fused_experts with use_int4_w4a16=True ...")
+    print(f"invoking fused_experts_impl with use_int4_w4a16=True ...")
     torch.cuda.synchronize()
 
-    out = fused_experts(
+    out = fused_experts_impl(
         hidden_states=w["a"],
         w1=w["w13"],
         w2=w["w2"],
@@ -111,12 +120,13 @@ def run(num_tokens):
         topk_ids=w["topk_ids"],
         inplace=False,
         activation="silu",
+        is_gated=True,
         use_int4_w4a16=True,
         w1_scale=w["s13"],
         w2_scale=w["s2"],
         w1_zp=w["z13"],
         w2_zp=w["z2"],
-        block_shape=[GROUP_SIZE, GROUP_SIZE],
+        block_shape=[0, GROUP_SIZE],   # [0, group_size] per the SGLang test
     )
     torch.cuda.synchronize()
 
