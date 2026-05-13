@@ -1,0 +1,44 @@
+#!/bin/bash
+# Wrapper around `docker run` for strix-halo-sglang. Sensible defaults for gfx1151.
+#
+# Usage:
+#   ./start-sglang.sh [MODEL] [extra sglang args...]
+#
+# Examples:
+#   ./start-sglang.sh                           # defaults to Qwen3.5-4B
+#   ./start-sglang.sh Qwen/Qwen3.5-4B
+#   ./start-sglang.sh Qwen/Qwen3.5-4B --context-length 16384
+
+set -euo pipefail
+
+MODEL="${1:-Qwen/Qwen3.5-4B}"
+shift || true
+
+IMAGE="${SGLANG_IMAGE:-strix-halo-sglang:dev}"
+PORT="${SGLANG_PORT:-30000}"
+NAME="${SGLANG_CONTAINER:-sglang}"
+HF_CACHE="${HF_CACHE:-$HOME/.cache/huggingface}"
+MEM_FRAC="${SGLANG_MEM_FRAC:-0.5}"
+CONTEXT="${SGLANG_CONTEXT:-8192}"
+
+mkdir -p "$HF_CACHE"
+
+# If a container with this name already exists, remove it.
+docker rm -f "$NAME" >/dev/null 2>&1 || true
+
+exec docker run -d --name "$NAME" \
+    --device=/dev/kfd --device=/dev/dri \
+    --ipc=host --network=host \
+    --security-opt seccomp=unconfined \
+    -v "$HF_CACHE:/root/.cache/huggingface" \
+    -e HF_TOKEN="${HF_TOKEN:-}" \
+    -e SGLANG_FORCE_NATIVE_LAYERNORM=1 \
+    "$IMAGE" \
+    python3 -m sglang.launch_server \
+        --model-path "$MODEL" \
+        --host 0.0.0.0 --port "$PORT" \
+        --mem-fraction-static "$MEM_FRAC" \
+        --context-length "$CONTEXT" \
+        --attention-backend triton \
+        --disable-cuda-graph \
+        "$@"
