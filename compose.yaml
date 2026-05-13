@@ -1,0 +1,39 @@
+# docker compose up -d  →  SGLang on http://localhost:30000
+#
+# Override defaults via .env or shell env, e.g.:
+#   SGLANG_MODEL=Qwen/Qwen3.5-4B HF_TOKEN=hf_xxx docker compose up -d
+
+services:
+  sglang:
+    image: ${SGLANG_IMAGE:-strix-halo-sglang:dev}
+    container_name: sglang
+    restart: unless-stopped
+    network_mode: host
+    ipc: host
+    security_opt:
+      - seccomp:unconfined
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      SGLANG_FORCE_NATIVE_LAYERNORM: "1"
+    volumes:
+      - ${HF_CACHE:-~/.cache/huggingface}:/root/.cache/huggingface
+    command:
+      - python3
+      - -m
+      - sglang.launch_server
+      - --model-path
+      - ${SGLANG_MODEL:-Qwen/Qwen3.5-4B}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "30000"
+      - --mem-fraction-static
+      - "${SGLANG_MEM_FRAC:-0.5}"
+      - --context-length
+      - "${SGLANG_CONTEXT:-8192}"
+      - --attention-backend
+      - triton
+      - --disable-cuda-graph
