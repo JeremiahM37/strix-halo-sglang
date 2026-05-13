@@ -94,7 +94,7 @@ Four small patches let SGLang run on gfx1151:
 1. **`sgl-kernel/setup_rocm.py`** — allow `gfx1151` in the arch list (upstream guards against anything but `gfx942`/`gfx950`).
 2. **`sglang/srt/layers/layernorm.py`** — `SGLANG_FORCE_NATIVE_LAYERNORM=1` skips the aiter (CDNA-only inline asm) and vLLM (older 4-arg signature) RMSNorm paths.
 3. **`sglang/srt/layers/quantization/awq/schemes/awq_moe.py`** — `SGLANG_AWQ_MOE_TRITON_ROCM=1` routes AWQ MoE through SGLang's existing Triton path on ROCm.
-4. **`sgl-kernel/csrc/moe/moe_topk_{softmax,sigmoid}_kernels.cu`** — fix host/device `WARP_SIZE` mismatch that caused `hipErrorLaunchFailure` → GPU page fault on the first MoE forward pass for any wave32 (RDNA 3.5) target. **This is the patch that unlocks AWQ-MoE inference on consumer Strix Halo.** Likely upstreamable.
+4. **`sgl-kernel/csrc/moe/moe_topk_{softmax,sigmoid}_kernels.cu`** — fix host/device `WARP_SIZE` mismatch that caused `hipErrorLaunchFailure` → GPU page fault on the first MoE forward pass for any wave32 (RDNA 3.5) target. **This is the patch that unlocks AWQ-MoE inference on consumer Strix Halo.** Lives downstream only — SGLang's sgl-kernel arch guard explicitly targets `gfx942`/`gfx950` (CDNA) and rejects everything else, so the project isn't accepting consumer-RDNA fixes.
 
 All four are baked into the Dockerfile by default. See [`patches/`](patches/) for the diffs.
 

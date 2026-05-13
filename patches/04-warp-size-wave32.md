@@ -55,6 +55,6 @@ prompt_tokens=16  completion_tokens=50  finish_reason=length
 
 GPU memory after load: 22.84 GB on a 61.7 GB GTT pool — matches the expected size for 4-bit 35B weights.
 
-## Upstream
+## Why downstream only
 
-This patch is a strong candidate for `sgl-project/sglang`. The same `WARP_SIZE` reliance exists in any other RDNA target (gfx1100/gfx1101/gfx1102/gfx1200/gfx1201) and likely faults the same way. The fix is a 1-line constant pin per file and changes nothing on NVIDIA (CUDA's `WARP_SIZE` is consistently 32) or CDNA (where `WARP_SIZE` is consistently 64).
+The bug is real for every wave32 ROCm target (gfx1100/1101/1102/1151/1200/1201) — same `WARP_SIZE` reliance, same fault. The fix is small and a no-op on CUDA / CDNA. But `sgl-kernel/setup_rocm.py` explicitly guards against anything other than `gfx942`/`gfx950` ("Unsupported GPU architecture detected"), so SGLang isn't accepting consumer-RDNA fixes — supporting wave32 would expand their support surface to consumer SKUs they don't test. An attempted upstream PR ([#25175](https://github.com/sgl-project/sglang/pull/25175)) was auto-closed by CI in minutes. The fix lives here instead.
