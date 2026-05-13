@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.env
+
+# Local benchmark output
+bench/results/
+bench/*.json
+bench/*.log
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
