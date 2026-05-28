@@ -37,6 +37,29 @@ The build takes ~10 minutes on first run, mostly spent compiling `sgl-kernel` fo
 
 - **SGLang version:** `--build-arg SGL_BRANCH=v0.5.11` (default: `main`)
 - **SGLang fork:** `--build-arg SGL_REPO=https://github.com/your/fork.git`
+- **Base image:** `--build-arg BASE_IMAGE=<registry>/kyuz0/vllm-therock-gfx1151:stable` (default: `kyuz0/vllm-therock-gfx1151:stable`). Use this to pull the base from a registry mirror when Docker Hub is unreachable — see [Troubleshooting](#troubleshooting) below.
+
+## Troubleshooting
+
+### `failed to resolve source metadata for docker.io/kyuz0/vllm-therock-gfx1151:stable`
+
+The base image exists and is pullable from Docker Hub — this error means your Docker daemon can't reach `registry-1.docker.io`. Common causes: ISP/firewall blocks, Docker Hub anonymous-pull rate limits, or being on a network where Docker Hub is restricted.
+
+Two fixes, pick one:
+
+1. **Configure a Docker Hub mirror once**, in `/etc/docker/daemon.json`:
+   ```json
+   { "registry-mirrors": ["https://dockerproxy.com"] }
+   ```
+   Then `sudo systemctl restart docker` and rebuild. This is the better fix because it applies to every image, not just this one.
+
+2. **Override the base image per-build:**
+   ```bash
+   docker build --build-arg BASE_IMAGE=dockerproxy.com/kyuz0/vllm-therock-gfx1151:stable -t strix-halo-sglang:dev .
+   ```
+   Substitute any mirror that proxies Docker Hub. The image must be the real `kyuz0/vllm-therock-gfx1151` — a vanilla ROCm/PyTorch image will not work because the gfx1151 wheels aren't there.
+
+To confirm the underlying image is reachable from anywhere, the current `:stable` digest is `sha256:f89c8c689ade28877ade980ba0f29b3142af16c6ebb7f3f285311d38bc81a8a2`.
 
 ## Verifying the build
 
