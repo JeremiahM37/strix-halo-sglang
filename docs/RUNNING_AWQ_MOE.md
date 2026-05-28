@@ -14,6 +14,7 @@ docker run -d --name sglang-awq \
     --ipc=host --network=host \
     --security-opt seccomp=unconfined \
     -v ~/.cache/huggingface:/root/.cache/huggingface \
+    -v ~/.cache/strix-halo-sglang-tunableop:/root/.tunableop \
     -e SGLANG_FORCE_NATIVE_LAYERNORM=1 \
     strix-halo-sglang:dev \
     python3 -m sglang.launch_server \
@@ -26,6 +27,8 @@ docker run -d --name sglang-awq \
         --attention-backend triton \
         --disable-cuda-graph
 ```
+
+**The `-v ~/.cache/strix-halo-sglang-tunableop:/root/.tunableop` mount is not optional.** Without it, TunableOp tunes every GEMM shape from scratch on each restart, and single-stream throughput drops from ~23 tps to ~12 tps. The cache file is tiny (~17 KB after warmup).
 
 ## Why these flags
 

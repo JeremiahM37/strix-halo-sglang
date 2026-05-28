@@ -57,6 +57,7 @@ docker run -d --name sglang \
     --ipc=host --network=host \
     --security-opt seccomp=unconfined \
     -v ~/.cache/huggingface:/root/.cache/huggingface \
+    -v ~/.cache/strix-halo-sglang-tunableop:/root/.tunableop \
     -e HF_TOKEN=$HF_TOKEN \
     -e SGLANG_FORCE_NATIVE_LAYERNORM=1 \
     strix-halo-sglang:dev \
@@ -68,6 +69,8 @@ docker run -d --name sglang \
         --attention-backend triton \
         --disable-cuda-graph
 ```
+
+**Mount `~/.cache/strix-halo-sglang-tunableop:/root/.tunableop` — without it, the TunableOp cache is wiped on every restart and single-stream throughput collapses by ~50%.** `start-sglang.sh` and `compose.yaml` do this automatically; the long-form command above is the only invocation that needs the explicit volume.
 
 Then:
 
@@ -108,9 +111,17 @@ Concurrent throughput on Qwen3.5-4B, same model on both engines:
 | 4 | 9.3 | 85.8 | 9.23× |
 | 8 | 9.2 | 159.9 | **17.4×** |
 
-Ollama serializes; SGLang's continuous batching keeps per-stream throughput nearly flat (23.1 → 20.0 tps from 1 → 8 streams) while aggregate scales near-linearly. Full script: [`bench/concurrent_throughput.py`](bench/concurrent_throughput.py).
+Same family on the 35B MoE (`qwen3.5:35b-a3b` GGUF vs `cyankiwi/Qwen3.5-35B-A3B-AWQ-4bit`):
 
-The image enables TunableOp (`PYTORCH_TUNABLEOP_ENABLED=1`) by default — first request to each unique GEMM shape autotunes; results persist to a mounted volume at `/root/.tunableop`. Subsequent runs use the cached tunings (warm cache = the numbers above).
+| Concurrent streams | Ollama tps | strix-halo-sglang tps | SGLang advantage |
+|---:|---:|---:|---:|
+| 1 | 37.8 | 23.4 | 0.62× |
+| 4 | 37.8 | 73.2 | 1.94× |
+| 8 | 39.1 | **131.1** | **3.35×** |
+
+Ollama serializes; SGLang's continuous batching keeps per-stream throughput nearly flat (4B: 23.1 → 20.0 tps, 35B-A3B: 23.4 → 16.4 tps from 1 → 8 streams) while aggregate scales near-linearly. Full numbers + what-didn't-work table: [`bench/results.md`](bench/results.md). Script: [`bench/concurrent_throughput.py`](bench/concurrent_throughput.py).
+
+The image enables TunableOp (`PYTORCH_TUNABLEOP_ENABLED=1`) by default — first request to each unique GEMM shape autotunes; results persist to a mounted volume at `/root/.tunableop`. Subsequent runs use the cached tunings (warm cache = the numbers above). **You must mount this path** — `start-sglang.sh` and `compose.yaml` do it automatically.
 
 ## Known limitations
 

@@ -23,17 +23,40 @@ Same model on both engines (`qwen3.5:4b` on Ollama, `Qwen/Qwen3.5-4B` on SGLang)
 
 ## Concurrent throughput — Qwen3.5-35B-A3B (MoE, A3B = 3.3B active)
 
-Same model family on both engines: `qwen3.5:35b-a3b` (GGUF, ~24 GB) on Ollama, `cyankiwi/Qwen3.5-35B-A3B-AWQ-4bit` (compressed-tensors AWQ, ~23 GB) on SGLang. 80-token generations, identical prompts, `enable_thinking=false`. SGLang runs require the [wave32 WARP_SIZE patch](../patches/04-warp-size-wave32.md); without it the first MoE forward GPU-faults.
+Same model family on both engines: `qwen3.5:35b-a3b` (GGUF, ~24 GB) on Ollama, `cyankiwi/Qwen3.5-35B-A3B-AWQ-4bit` (compressed-tensors AWQ, ~23 GB) on SGLang. 80-token generations, identical prompts, `enable_thinking=false`. SGLang runs require the [wave32 WARP_SIZE patch](../patches/04-warp-size-wave32.md); without it the first MoE forward GPU-faults. **SGLang numbers below are warm TunableOp cache** — see "Cache-mount caveat" below.
 
 | Concurrent streams | Ollama agg tps | SGLang agg tps | per-stream tps (SGLang) | SGLang advantage |
 |---:|---:|---:|---:|---:|
-| 1 | 37.7 | 11.6 | 11.6 | 0.31× |
-| 4 | 38.8 | 42.5 | 10.6 | 1.10× |
-| 8 | 39.0 | **80.1** | 10.0 | **2.05×** |
+| 1 | 37.8 | 23.4 | 23.4 | 0.62× |
+| 4 | 37.8 | 73.2 | 18.3 | 1.94× |
+| 8 | 39.1 | **131.1** | 16.4 | **3.35×** |
 
-**Reading:** Ollama wins single-stream by 3.3× — llama.cpp ships hand-tuned HIP MoE kernels and a near-zero dispatch path. SGLang's AWQ MoE goes through generic untuned Triton kernels (no `int4_w4a16` config file for gfx1151). But continuous batching keeps per-stream throughput nearly flat (11.6 → 10.0 tps from 1 → 8 streams), so SGLang doubles Ollama at 8 concurrent streams. Tuning the MoE Triton kernel configs for gfx1151 should close the single-stream gap.
+**Reading:** Ollama still wins single-stream (1.6×) — llama.cpp ships hand-tuned HIP MoE kernels and a near-zero dispatch path. But SGLang's continuous batching holds per-stream throughput nearly flat (23.4 → 16.4 tps from 1 → 8 streams) while Ollama collapses to per-stream serialized rate (4.9 tps at 8 concurrent), so SGLang reaches **3.35× Ollama at 8 streams**. The remaining single-stream gap is in the MoE Triton kernels themselves; tuning per-shape configs for gfx1151 is the obvious next lever (synthetic tuning hurt — see "What didn't work" below).
 
-Run with `--mem-fraction-static 0.55 --context-length 2048 --max-total-tokens 4096 --max-mamba-cache-size 32 --disable-cuda-graph`; the SGLang server is sized to fit on a 61.7 GB GTT pool. See [docs/RUNNING_AWQ_MOE.md](../docs/RUNNING_AWQ_MOE.md) for a full guide.
+### Cache-mount caveat
+
+The headline numbers depend on a persistent TunableOp cache. The image enables TunableOp and points it at `/root/.tunableop/tunableop_results.csv`, but if you don't mount that path as a volume, the cache is wiped on every restart and single-stream collapses to ~11.6 tps (cold). `start-sglang.sh` and `compose.yaml` both mount it automatically; ad-hoc `docker run` invocations need:
+
+```
+-v ~/.cache/strix-halo-sglang-tunableop:/root/.tunableop
+```
+
+Cache is small (~17 KB) and is populated by the first ~10 requests after a fresh start.
+
+### What didn't work (combo tests on top of warm TunableOp)
+
+Tested separately to see if they stack with the warm cache. None did — the warm cache covers the attention/projection bottleneck, and the remaining time is in MoE GEMMs where these knobs don't help.
+
+| Knob | Single-stream agg tps | vs warm baseline |
+|---|---:|---:|
+| Warm TunableOp (baseline) | 23.4 | — |
+| + Tuned MoE config (batch_size=1 only) | 19.8 | **-15%** (synthetic-tuned tile picks BSM=32, bad fit for real M=8 decode) |
+| + `--moe-runner-backend aiter` | 9.9 (cold) / no warm rerun | within noise |
+| + `--enforce-piecewise-cuda-graph` | tested cold only; 100s capture time | within noise |
+
+The MoE-tuning regression is interesting: the upstream `tuning_fused_moe_triton.py` benchmarks the full forward with random expert routing and picks a configuration that minimizes that wall-clock — but at decode time real models hit the kernel with a much smaller effective M than the tuner's synthetic uniform distribution implies. Larger tile sizes that look fast on synthetic traces just waste compute on padding in production. Would need topk-id-driven tuning (sgl-kernel ships `tuning_fused_moe_triton_sep.py` for this) to fix.
+
+Run with `--mem-fraction-static 0.55 --context-length 2048 --max-total-tokens 4096 --max-mamba-cache-size 32 --disable-cuda-graph` and `-v $TUNABLE_DIR:/root/.tunableop`; the SGLang server is sized to fit on a 61.7 GB GTT pool. See [docs/RUNNING_AWQ_MOE.md](../docs/RUNNING_AWQ_MOE.md) for a full guide.
 
 ## Single-stream decode — Qwen3.5-4B
 
