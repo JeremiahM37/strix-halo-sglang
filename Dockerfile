@@ -3,7 +3,11 @@
 # Build:   docker build -t strix-halo-sglang:dev .
 # Run:     see README.md
 
-FROM kyuz0/vllm-therock-gfx1151:stable
+# Override BASE_IMAGE to use a registry mirror when Docker Hub is unreachable,
+# e.g. --build-arg BASE_IMAGE=dockerproxy.com/kyuz0/vllm-therock-gfx1151:stable
+# See docs/BUILDING.md for details.
+ARG BASE_IMAGE=kyuz0/vllm-therock-gfx1151:stable
+FROM ${BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV SGLANG_FORCE_NATIVE_LAYERNORM=1
