@@ -17,6 +17,17 @@ AMD's official `rocm/sgl-dev` images only target MI300/MI350 data-center GPUs. T
 
 Tested on Fedora 43 host, ROCm 7.13 nightly, PyTorch 2.13.
 
+## Tested models
+
+| Model | Loads | Inference | GPU mem | Notes |
+|---|:-:|:-:|---:|---|
+| `Qwen/Qwen3-0.6B` | ✅ | ✅ | ~2 GB | Smoke test. Loads in seconds. |
+| `Qwen/Qwen3.5-4B` | ✅ | ✅ | ~10 GB | Reference benchmark. 16.5 tps single-stream, 116 tps at 8 concurrent. |
+| `cyankiwi/Qwen3.5-35B-A3B-AWQ-4bit` | ✅ | ❌ | ~23 GB | Loads cleanly with `SGLANG_AWQ_MOE_TRITON_ROCM=1`; first forward pass page-faults — see [docs/AWQ_MOE_DEBUG.md](docs/AWQ_MOE_DEBUG.md). |
+| `Qwen/Qwen3.5-35B-A3B-GPTQ-Int4` | ❌ | — | — | GPTQ-on-MoE needs the `gptq_marlin` backend, which is NVIDIA-only today. Use the AWQ variant above instead. |
+
+Hardware tested: AMD Ryzen AI Max+ 395 / Radeon 8060S (gfx1151), 61.7 GB GTT. If you've run this on a different Strix Halo SKU please open an issue with results.
+
 ## Quickstart
 
 Build the image:
@@ -25,7 +36,20 @@ Build the image:
 docker build -t strix-halo-sglang:dev .
 ```
 
-Run it:
+Run it with the helper script:
+
+```bash
+./start-sglang.sh                          # defaults to Qwen3.5-4B
+./start-sglang.sh Qwen/Qwen3.5-4B
+```
+
+Or with Docker Compose:
+
+```bash
+docker compose up -d
+```
+
+Or the long form if you prefer:
 
 ```bash
 docker run -d --name sglang \
