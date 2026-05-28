@@ -21,6 +21,20 @@ Same model on both engines (`qwen3.5:4b` on Ollama, `Qwen/Qwen3.5-4B` on SGLang)
 | Initial (CUDA graphs off, FP16 cast, no env tuning) | 116.7 | — |
 | TunableOp + dev kernarg + AOTriton + native BF16 + CUDA graphs ≤ bs8 | **159.9** | **+37%** |
 
+## Concurrent throughput — Qwen3.5-35B-A3B (MoE, A3B = 3.3B active)
+
+Same model family on both engines: `qwen3.5:35b-a3b` (GGUF, ~24 GB) on Ollama, `cyankiwi/Qwen3.5-35B-A3B-AWQ-4bit` (compressed-tensors AWQ, ~23 GB) on SGLang. 80-token generations, identical prompts, `enable_thinking=false`. SGLang runs require the [wave32 WARP_SIZE patch](../patches/04-warp-size-wave32.md); without it the first MoE forward GPU-faults.
+
+| Concurrent streams | Ollama agg tps | SGLang agg tps | per-stream tps (SGLang) | SGLang advantage |
+|---:|---:|---:|---:|---:|
+| 1 | 37.7 | 11.6 | 11.6 | 0.31× |
+| 4 | 38.8 | 42.5 | 10.6 | 1.10× |
+| 8 | 39.0 | **80.1** | 10.0 | **2.05×** |
+
+**Reading:** Ollama wins single-stream by 3.3× — llama.cpp ships hand-tuned HIP MoE kernels and a near-zero dispatch path. SGLang's AWQ MoE goes through generic untuned Triton kernels (no `int4_w4a16` config file for gfx1151). But continuous batching keeps per-stream throughput nearly flat (11.6 → 10.0 tps from 1 → 8 streams), so SGLang doubles Ollama at 8 concurrent streams. Tuning the MoE Triton kernel configs for gfx1151 should close the single-stream gap.
+
+Run with `--mem-fraction-static 0.55 --context-length 2048 --max-total-tokens 4096 --max-mamba-cache-size 32 --disable-cuda-graph`; the SGLang server is sized to fit on a 61.7 GB GTT pool. See [docs/RUNNING_AWQ_MOE.md](../docs/RUNNING_AWQ_MOE.md) for a full guide.
+
 ## Single-stream decode — Qwen3.5-4B
 
 Same setup, sequential requests only.
