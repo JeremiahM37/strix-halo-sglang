@@ -18,10 +18,12 @@ IMAGE="${SGLANG_IMAGE:-strix-halo-sglang:dev}"
 PORT="${SGLANG_PORT:-30000}"
 NAME="${SGLANG_CONTAINER:-sglang}"
 HF_CACHE="${HF_CACHE:-$HOME/.cache/huggingface}"
+TUNABLE_DIR="${TUNABLE_DIR:-$HOME/.cache/strix-halo-sglang-tunableop}"
 MEM_FRAC="${SGLANG_MEM_FRAC:-0.5}"
 CONTEXT="${SGLANG_CONTEXT:-8192}"
+CUDA_GRAPH_MAX_BS="${SGLANG_CUDA_GRAPH_MAX_BS:-8}"
 
-mkdir -p "$HF_CACHE"
+mkdir -p "$HF_CACHE" "$TUNABLE_DIR"
 
 # If a container with this name already exists, remove it.
 docker rm -f "$NAME" >/dev/null 2>&1 || true
@@ -31,6 +33,7 @@ exec docker run -d --name "$NAME" \
     --ipc=host --network=host \
     --security-opt seccomp=unconfined \
     -v "$HF_CACHE:/root/.cache/huggingface" \
+    -v "$TUNABLE_DIR:/root/.tunableop" \
     -e HF_TOKEN="${HF_TOKEN:-}" \
     -e SGLANG_FORCE_NATIVE_LAYERNORM=1 \
     "$IMAGE" \
@@ -40,5 +43,5 @@ exec docker run -d --name "$NAME" \
         --mem-fraction-static "$MEM_FRAC" \
         --context-length "$CONTEXT" \
         --attention-backend triton \
-        --disable-cuda-graph \
+        --cuda-graph-max-bs "$CUDA_GRAPH_MAX_BS" \
         "$@"
