@@ -49,15 +49,15 @@ Two fixes, pick one:
 
 1. **Configure a Docker Hub mirror once**, in `/etc/docker/daemon.json`:
    ```json
-   { "registry-mirrors": ["https://dockerproxy.com"] }
+   { "registry-mirrors": ["https://mirror.gcr.io"] }
    ```
    Then `sudo systemctl restart docker` and rebuild. This is the better fix because it applies to every image, not just this one.
 
 2. **Override the base image per-build:**
    ```bash
-   docker build --build-arg BASE_IMAGE=dockerproxy.com/kyuz0/vllm-therock-gfx1151:stable -t strix-halo-sglang:dev .
+   docker build --build-arg BASE_IMAGE=mirror.gcr.io/kyuz0/vllm-therock-gfx1151:stable -t strix-halo-sglang:dev .
    ```
-   Substitute any mirror that proxies Docker Hub. The image must be the real `kyuz0/vllm-therock-gfx1151` — a vanilla ROCm/PyTorch image will not work because the gfx1151 wheels aren't there.
+   `mirror.gcr.io` is Google's Docker Hub mirror — verified to serve this image with a matching digest. Any other Docker Hub mirror should also work; the image must be the real `kyuz0/vllm-therock-gfx1151` because the gfx1151 wheels aren't in a vanilla ROCm/PyTorch image.
 
 To confirm the underlying image is reachable from anywhere, the current `:stable` digest is `sha256:f89c8c689ade28877ade980ba0f29b3142af16c6ebb7f3f285311d38bc81a8a2`.
 

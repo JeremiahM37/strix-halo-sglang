@@ -4,7 +4,7 @@
 # Run:     see README.md
 
 # Override BASE_IMAGE to use a registry mirror when Docker Hub is unreachable,
-# e.g. --build-arg BASE_IMAGE=dockerproxy.com/kyuz0/vllm-therock-gfx1151:stable
+# e.g. --build-arg BASE_IMAGE=mirror.gcr.io/kyuz0/vllm-therock-gfx1151:stable
 # See docs/BUILDING.md for details.
 ARG BASE_IMAGE=kyuz0/vllm-therock-gfx1151:stable
 FROM ${BASE_IMAGE}
