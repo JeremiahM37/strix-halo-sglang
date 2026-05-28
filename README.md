@@ -19,9 +19,15 @@ Tested on Fedora 43 host, ROCm 7.13 nightly, PyTorch 2.13.
 
 ## Quickstart
 
-```bash
-docker pull ghcr.io/<your-account>/strix-halo-sglang:latest
+Build the image:
 
+```bash
+docker build -t strix-halo-sglang:dev .
+```
+
+Run it:
+
+```bash
 docker run -d --name sglang \
     --device=/dev/kfd --device=/dev/dri \
     --ipc=host --network=host \
@@ -29,7 +35,7 @@ docker run -d --name sglang \
     -v ~/.cache/huggingface:/root/.cache/huggingface \
     -e HF_TOKEN=$HF_TOKEN \
     -e SGLANG_FORCE_NATIVE_LAYERNORM=1 \
-    ghcr.io/<your-account>/strix-halo-sglang:latest \
+    strix-halo-sglang:dev \
     python3 -m sglang.launch_server \
         --model-path Qwen/Qwen3.5-4B \
         --host 0.0.0.0 --port 30000 \
@@ -47,15 +53,7 @@ curl http://localhost:30000/v1/chat/completions \
     -d '{"model":"Qwen/Qwen3.5-4B","messages":[{"role":"user","content":"hi"}]}'
 ```
 
-## Build from source
-
-```bash
-git clone https://github.com/<your-account>/strix-halo-sglang.git
-cd strix-halo-sglang
-docker build -t strix-halo-sglang:dev .
-```
-
-Build takes ~10 min. Most of it is compiling `sgl-kernel` for gfx1151. See [docs/BUILDING.md](docs/BUILDING.md).
+Build takes ~10 min on first run; details in [docs/BUILDING.md](docs/BUILDING.md).
 
 ## What's in the image
 
@@ -110,4 +108,4 @@ The `strix-halo-toolboxes` ecosystem (notably [kyuz0's vLLM toolbox](https://git
 
 ## License
 
-Apache 2.0. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
