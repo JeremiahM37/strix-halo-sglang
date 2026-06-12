@@ -25,8 +25,15 @@ ENV TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
 WORKDIR /sgl-workspace
 
 ARG SGL_REPO=https://github.com/sgl-project/sglang.git
-ARG SGL_BRANCH=main
-RUN git clone --depth 1 -b ${SGL_BRANCH} ${SGL_REPO}
+# Pinned to a commit verified against this base image. Unpinned `main` drifts,
+# which is what broke fresh builds in issue #5. SGL_BRANCH accepts any ref —
+# a branch, tag, or commit SHA — because we fetch+checkout rather than clone -b.
+ARG SGL_BRANCH=b0b8436f1c031caba61c4cadb10d22ba097cd960
+RUN git init sglang \
+    && cd sglang \
+    && git remote add origin ${SGL_REPO} \
+    && git fetch --depth 1 origin ${SGL_BRANCH} \
+    && git checkout FETCH_HEAD
 
 WORKDIR /sgl-workspace/sglang
 
@@ -161,10 +168,26 @@ PYEOF
 WORKDIR /sgl-workspace/sglang/sgl-kernel
 RUN AMDGPU_TARGET=gfx1151 python3 setup_rocm.py develop
 
-# Install SGLang via pyproject_other.toml (ROCm-safe deps, no NVIDIA wheels)
+# Install SGLang via pyproject_other.toml (ROCm-safe deps, no NVIDIA wheels).
+#
+# Two guards stop the install from clobbering the base image's gfx1151-compiled
+# torch/torchvision — the root cause of issue #5, where a fresh build pulled
+# generic PyPI wheels and failed at runtime with
+# `libc10_hip.so: cannot open shared object file` and
+# `operator torchvision::nms does not exist`:
+#
+#   1. compressed-tensors' old `==0.15.0` pin requires torch<2.11. The base image
+#      ships torch 2.13, so pip would resolve that conflict by *downgrading* torch
+#      to a non-ROCm wheel. 0.16.0+ relaxes the bound to torch>=2.10, which the
+#      base satisfies.
+#   2. A pip constraints file freezes torch + torchvision to the exact ROCm builds
+#      already present, so no dependency can replace them. A future incompatibility
+#      then fails the build loudly instead of silently breaking at runtime.
 WORKDIR /sgl-workspace/sglang
 RUN cp python/pyproject_other.toml python/pyproject.toml \
-    && pip install -e 'python[srt_hip]' --no-build-isolation \
+    && sed -i 's/compressed-tensors==0.15.0/compressed-tensors>=0.16.0/' python/pyproject.toml \
+    && python3 -c "import torch, torchvision; open('/tmp/rocm-constraints.txt', 'w').write(f'torch=={torch.__version__}\ntorchvision=={torchvision.__version__}\n')" \
+    && PIP_CONSTRAINT=/tmp/rocm-constraints.txt pip install -e 'python[srt_hip]' --no-build-isolation \
     && (pip cache purge 2>/dev/null || true)
 
 # File-level verification (build host has no GPU; runtime check on container start).
