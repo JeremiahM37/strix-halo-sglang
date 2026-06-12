@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A full image build needs the gfx1151 base image and ~50 GB — not feasible on
+# hosted runners. These jobs instead catch the things that actually break
+# without hardware: drift between the pinned SGLang and the patches (issue #5),
+# regressions of the dependency fix, and Dockerfile/script/compose mistakes.
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+          failure-threshold: error
+
+      - name: Lint shell scripts
+        run: shellcheck --severity=warning start-sglang.sh
+
+      - name: Validate compose file
+        run: docker compose -f compose.yaml config --quiet
+
+  patches:
+    name: Patch & dependency guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify patches apply to the pinned SGLang and the fix is intact
+        run: python3 tests/check_patches.py
