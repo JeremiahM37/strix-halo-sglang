@@ -23,6 +23,8 @@ Tested on Fedora 43 host, ROCm 7.13 nightly, PyTorch 2.13.
 |---|:-:|:-:|---:|---|
 | `Qwen/Qwen3-0.6B` | ✅ | ✅ | ~2 GB | Smoke test. Loads in seconds. |
 | `Qwen/Qwen3.5-4B` | ✅ | ✅ | ~10 GB | Reference benchmark. 16.5 tps single-stream, 116 tps at 8 concurrent. |
+| `Qwen/Qwen3.6-27B` | ✅ | ✅ | ~52 GB | Dense Mamba+attention hybrid, BF16. Comfortable on 96 GB+ GTT; on a 64 GB box squeeze it in with `--mem-fraction-static 0.96 --max-mamba-cache-size 16 --max-total-tokens 8192 --disable-cuda-graph`. ~1.7 tps single-stream — BF16 27B is GTT-bound on the iGPU. |
+| `cyankiwi/Qwen3.6-27B-AWQ-BF16-INT4` | ❌ | — | — | 4-bit (compressed-tensors wNa16) calls `gptq_marlin_repack`, which is NVIDIA-only — same wall as the GPTQ row below. Run the BF16 model above instead. |
 | `cyankiwi/Qwen3.5-35B-A3B-AWQ-4bit` | ✅ | ✅ | ~23 GB | Mamba+MoE hybrid; needs `--max-total-tokens N --max-mamba-cache-size M` to fit. See [docs/RUNNING_AWQ_MOE.md](docs/RUNNING_AWQ_MOE.md). |
 | `Qwen/Qwen3.5-35B-A3B-GPTQ-Int4` | ❌ | — | — | GPTQ-on-MoE needs the `gptq_marlin` backend, which is NVIDIA-only today. Use the AWQ variant above instead. |
 
