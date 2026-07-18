@@ -3,10 +3,12 @@
 # Build:   docker build -t strix-halo-sglang:dev .
 # Run:     see README.md
 
-# Override BASE_IMAGE to use a registry mirror when Docker Hub is unreachable,
+# Base is pinned by digest so `:stable` can't drift under us (same rationale as
+# the SGL_BRANCH pin below). Override BASE_IMAGE to bump the base or to use a
+# registry mirror when Docker Hub is unreachable,
 # e.g. --build-arg BASE_IMAGE=mirror.gcr.io/kyuz0/vllm-therock-gfx1151:stable
 # See docs/BUILDING.md for details.
-ARG BASE_IMAGE=kyuz0/vllm-therock-gfx1151:stable
+ARG BASE_IMAGE=kyuz0/vllm-therock-gfx1151:stable@sha256:f89c8c689ade28877ade980ba0f29b3142af16c6ebb7f3f285311d38bc81a8a2
 FROM ${BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -94,21 +96,33 @@ COPY patches/awq_moe_rocm_repack.py /sgl-workspace/sglang/python/sglang/srt/laye
 RUN python3 - <<'PYEOF'
 p = '/sgl-workspace/sglang/python/sglang/srt/layers/quantization/awq/schemes/awq_moe.py'
 t = open(p).read()
-t = t.replace(
+
+
+def rep(old: str, new: str, what: str, count: int = -1) -> None:
+    # Assert the anchor is present so upstream drift fails the build loudly
+    # instead of silently skipping the patch (same style as patches 1b/2).
+    global t
+    assert old in t, f'awq_moe.py: {what} anchor not found, upstream layout changed'
+    t = t.replace(old, new, count)
+
+
+rep(
     'from sglang.srt.layers.moe import (',
     'import os\nfrom sglang.srt.utils import is_hip\nfrom sglang.srt.layers.moe import (',
+    'moe import',
     1,
 )
-t = t.replace(
-    '''    def __init__(self, quant_config: "AWQMarlinConfig"):
+rep(
+    '''    def __init__(self, quant_config: AWQMarlinConfig):
         self.quant_config = quant_config
         if self.quant_config.weight_bits != 4:''',
-    '''    def __init__(self, quant_config: "AWQMarlinConfig"):
+    '''    def __init__(self, quant_config: AWQMarlinConfig):
         self.quant_config = quant_config
         self._rocm_triton = is_hip() and os.environ.get("SGLANG_AWQ_MOE_TRITON_ROCM", "0") == "1"
         if self.quant_config.weight_bits != 4:''',
+    '__init__',
 )
-t = t.replace(
+rep(
     '''    def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
         self.kernel.process_weights_after_loading(layer)''',
     '''    def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
@@ -128,23 +142,25 @@ t = t.replace(
             layer.w2_scales   = torch.nn.Parameter(sc2,  requires_grad=False)
             return
         self.kernel.process_weights_after_loading(layer)''',
+    'process_weights_after_loading',
 )
-t = t.replace(
+rep(
     'self.kernel.runner = MoeRunner(MoeRunnerBackend.MARLIN, moe_runner_config)',
     '''backend = MoeRunnerBackend.TRITON if self._rocm_triton else MoeRunnerBackend.MARLIN
         self.kernel.runner = MoeRunner(backend, moe_runner_config)''',
+    'MoeRunner MARLIN backend',
 )
-t = t.replace(
+rep(
     '''    def apply_weights(
         self,
         layer: torch.nn.Module,
-        dispatch_output: "StandardDispatchOutput",
+        dispatch_output: StandardDispatchOutput,
     ):
         return self.kernel.apply(layer, dispatch_output)''',
     '''    def apply_weights(
         self,
         layer: torch.nn.Module,
-        dispatch_output: "StandardDispatchOutput",
+        dispatch_output: StandardDispatchOutput,
     ):
         if self._rocm_triton:
             from sglang.srt.layers.moe.moe_runner.triton import TritonMoeQuantInfo
@@ -160,6 +176,7 @@ t = t.replace(
             )
             return self.kernel.runner.run(dispatch_output, quant_info)
         return self.kernel.apply(layer, dispatch_output)''',
+    'apply_weights',
 )
 open(p, 'w').write(t)
 PYEOF

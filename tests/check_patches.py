@@ -69,11 +69,21 @@ SOURCE_ANCHORS: dict[str, list[str]] = {
         "elif _is_hip:",
         "from vllm._custom_ops import fused_add_rms_norm, rms_norm",
     ],
-    # Patch 3 — AWQ MoE Triton dispatcher
+    # Patch 3 — AWQ MoE Triton dispatcher (one anchor per t.replace in the Dockerfile)
     "python/sglang/srt/layers/quantization/awq/schemes/awq_moe.py": [
         "from sglang.srt.layers.moe import (",
+        '''    def __init__(self, quant_config: AWQMarlinConfig):
+        self.quant_config = quant_config
+        if self.quant_config.weight_bits != 4:''',
+        '''    def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
+        self.kernel.process_weights_after_loading(layer)''',
         "self.kernel.runner = MoeRunner(MoeRunnerBackend.MARLIN, moe_runner_config)",
-        "return self.kernel.apply(layer, dispatch_output)",
+        '''    def apply_weights(
+        self,
+        layer: torch.nn.Module,
+        dispatch_output: StandardDispatchOutput,
+    ):
+        return self.kernel.apply(layer, dispatch_output)''',
     ],
     # Dependency fix — the pin our build rewrites must still be the one present
     "python/pyproject_other.toml": ["compressed-tensors==0.15.0"],
@@ -108,7 +118,8 @@ def main() -> int:
         path = src / rel
         text = path.read_text() if path.is_file() else None
         for anchor in anchors:
-            check(f"{rel}: {anchor[:48]}", text is not None and anchor in text,
+            label = " ".join(anchor.split())[:48]
+            check(f"{rel}: {label}", text is not None and anchor in text,
                   "file missing" if text is None else "anchor not found")
 
     print(f"\n{checks - len(failures)}/{checks} checks passed.")

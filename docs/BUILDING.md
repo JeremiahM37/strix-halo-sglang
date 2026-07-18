@@ -59,7 +59,7 @@ Two fixes, pick one:
    ```
    `mirror.gcr.io` is Google's Docker Hub mirror — verified to serve this image with a matching digest. Any other Docker Hub mirror should also work; the image must be the real `kyuz0/vllm-therock-gfx1151` because the gfx1151 wheels aren't in a vanilla ROCm/PyTorch image.
 
-To confirm the underlying image is reachable from anywhere, the current `:stable` digest is `sha256:f89c8c689ade28877ade980ba0f29b3142af16c6ebb7f3f285311d38bc81a8a2`.
+To confirm the underlying image is reachable from anywhere, the current `:stable` digest is `sha256:f89c8c689ade28877ade980ba0f29b3142af16c6ebb7f3f285311d38bc81a8a2`. The Dockerfile's default `BASE_IMAGE` pins this exact digest so a moving `:stable` tag can't silently change the base; override `BASE_IMAGE` to bump it deliberately.
 
 ## Verifying the build
 
