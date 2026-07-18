@@ -89,7 +89,7 @@ Build takes ~10 min on first run; details in [docs/BUILDING.md](docs/BUILDING.md
 - Base: [`kyuz0/vllm-therock-gfx1151:stable`](https://hub.docker.com/r/kyuz0/vllm-therock-gfx1151)
 - PyTorch 2.13.0a0 + ROCm 7.13 (TheRock nightly)
 - AITER pre-built for gfx1151
-- SGLang `main`, built from source
+- SGLang pinned to a verified commit (see `SGL_BRANCH` in the [Dockerfile](Dockerfile)), built from source
 - `sgl-kernel` compiled with `--amdgpu-target=gfx1151`
 
 ## Patches applied
@@ -127,7 +127,7 @@ The image enables TunableOp (`PYTORCH_TUNABLEOP_ENABLED=1`) by default — first
 
 ## Known limitations
 
-- **AWQ MoE inference page-faults.** Model loads (23 GB for Qwen3.5-35B-A3B-AWQ), forward pass crashes. Debug plan in [docs/AWQ_MOE_DEBUG.md](docs/AWQ_MOE_DEBUG.md).
+- **AWQ MoE page fault — fixed.** Early builds crashed on the first MoE forward pass; the cause was a host/device `WARP_SIZE` mismatch in the topk gating kernels, fixed by [patch 4](patches/04-warp-size-wave32.md) (baked into the default build). Qwen3.5-35B-A3B-AWQ-4bit now runs end-to-end — see [docs/RUNNING_AWQ_MOE.md](docs/RUNNING_AWQ_MOE.md). The debugging record lives in [docs/AWQ_MOE_DEBUG.md](docs/AWQ_MOE_DEBUG.md).
 - **No aiter Flash Attention on gfx1151.** aiter's MHA kernels use Composable Kernel templates that assume wave64; gfx1151 is wave32. Falls back to Triton attention (slower).
 - **No aiter RMSNorm.** `rmsnorm_quant_kernels.cu` uses CDNA-only `v_pk_mul_f32` inline asm.
 - **CUDA graphs engage but the bottleneck is in-kernel.** No measurable speedup on this stack today.

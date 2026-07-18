@@ -31,12 +31,21 @@ async def one_call(url, model, prompt, max_tokens):
         req = urllib.request.Request(
             url, data=payload, headers={"Content-Type": "application/json"}
         )
+        # Raises urllib.error.HTTPError on non-200; the caller counts failures.
         with urllib.request.urlopen(req, timeout=120) as r:
-            return json.loads(r.read())
+            body = r.read()
+        d = json.loads(body)
+        try:
+            return d["usage"]["completion_tokens"]
+        except (KeyError, TypeError):
+            # 200 with an error body (e.g. {"error": ...}) or missing usage.
+            raise RuntimeError(
+                f"no usage.completion_tokens in response: {body[:200]!r}"
+            ) from None
 
     t0 = time.time()
-    d = await asyncio.get_running_loop().run_in_executor(None, do_req)
-    return time.time() - t0, d["usage"]["completion_tokens"]
+    tokens = await asyncio.get_running_loop().run_in_executor(None, do_req)
+    return time.time() - t0, tokens
 
 
 async def bench(url, model, label, concurrency_levels):
@@ -47,12 +56,21 @@ async def bench(url, model, label, concurrency_levels):
         t0 = time.time()
         results = await asyncio.gather(
             *[one_call(url, model, "Write a Python function that counts vowels.", 80)
-              for _ in range(c)]
+              for _ in range(c)],
+            return_exceptions=True,
         )
         elapsed = time.time() - t0
-        total_tokens = sum(r[1] for r in results)
+        ok = [r for r in results if not isinstance(r, BaseException)]
+        failed = len(results) - len(ok)
+        if failed:
+            first_err = next(r for r in results if isinstance(r, BaseException))
+            print(f"  {c:>12}  {failed}/{c} requests failed "
+                  f"(first error: {first_err})")
+            if not ok:
+                continue
+        total_tokens = sum(r[1] for r in ok)
         agg = total_tokens / elapsed
-        per = (total_tokens / c) / elapsed
+        per = (total_tokens / len(ok)) / elapsed
         print(f"  {c:>12}  {elapsed:>10.2f}  {total_tokens:>10}  "
               f"{agg:>10.1f}  {per:>14.1f}")
 

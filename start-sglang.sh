@@ -25,8 +25,12 @@ CUDA_GRAPH_MAX_BS="${SGLANG_CUDA_GRAPH_MAX_BS:-8}"
 
 mkdir -p "$HF_CACHE" "$TUNABLE_DIR"
 
-# If a container with this name already exists, remove it.
-docker rm -f "$NAME" >/dev/null 2>&1 || true
+# If a container with this name already exists, remove it (with a notice, so
+# an unnoticed name collision doesn't silently kill someone's running server).
+if docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; then
+    echo "Note: removing existing container '$NAME' (set SGLANG_CONTAINER to run alongside it)." >&2
+    docker rm -f "$NAME" >/dev/null
+fi
 
 exec docker run -d --name "$NAME" \
     --device=/dev/kfd --device=/dev/dri \
