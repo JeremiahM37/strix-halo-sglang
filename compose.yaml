@@ -1,5 +1,10 @@
 # docker compose up -d  →  SGLang on http://localhost:30000
 #
+# One-time setup: create the host cache dirs before the first `up`, or the
+# Docker daemon will create them owned by root:
+#   mkdir -p ~/.cache/huggingface ~/.cache/strix-halo-sglang-tunableop
+# (`start-sglang.sh` does this automatically.)
+#
 # Override defaults via .env or shell env, e.g.:
 #   SGLANG_MODEL=Qwen/Qwen3.5-4B HF_TOKEN=hf_xxx docker compose up -d
 
