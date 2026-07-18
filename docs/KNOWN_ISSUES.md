@@ -1,19 +1,19 @@
 # Known issues
 
-## AWQ MoE inference page-faults
+## AWQ MoE inference page-faults — RESOLVED
 
-**Symptom:** Model loads (correct packed-int4 weight size on GPU), server starts, `/v1/models` serves. First inference request triggers:
+**Resolved by [patch 4](../patches/04-warp-size-wave32.md)** (host/device `WARP_SIZE` mismatch in the sgl-kernel topk gating kernels), which is baked into the default image build. AWQ MoE inference now works end-to-end — see [`RUNNING_AWQ_MOE.md`](RUNNING_AWQ_MOE.md).
+
+The historical detail below is kept as a debugging record.
+
+**Symptom (historical):** Model loads (correct packed-int4 weight size on GPU), server starts, `/v1/models` serves. First inference request triggers:
 
 ```
 Memory access fault by GPU node-1 on address 0x7ff63d77c000.
 Reason: Page not present or supervisor privilege.
 ```
 
-Crash is inside `fused_moe_kernel_gptq_awq` (`sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe_triton_kernels.py:91`) when called with `use_int4_w4a16=True`.
-
-Mitigation: leave `SGLANG_AWQ_MOE_TRITON_ROCM` unset (default). The AWQ MoE Triton dispatcher patch is then inert.
-
-Debug plan: see [`AWQ_MOE_DEBUG.md`](AWQ_MOE_DEBUG.md).
+The crash appeared to be inside `fused_moe_kernel_gptq_awq` (`sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe_triton_kernels.py:91`) when called with `use_int4_w4a16=True` — but that attribution turned out to be wrong: the AWQ kernel never actually ran. The real fault was a failed launch of the topk gating softmax kernel (`__launch_bounds__` compiled for 128 threads, launched with 256) that poisoned the GPU command queue; the *next* kernel then page-faulted. Root-cause analysis in [patch 4](../patches/04-warp-size-wave32.md); the full debugging record is in [`AWQ_MOE_DEBUG.md`](AWQ_MOE_DEBUG.md).
 
 ## aiter Flash Attention won't build on RDNA 3.5
 
@@ -58,10 +58,10 @@ Mitigation: use `--attention-backend triton`.
 
 ## Single-stream decode is slower than Ollama
 
-**Symptom:** ~16 tps on Qwen3.5-4B vs Ollama's ~26 tps for the same model.
+**Symptom:** Sequential (single-stream) decode on Qwen3.5-4B trails Ollama. Current measurements live in [`bench/results.md`](../bench/results.md) — the single source of truth for numbers.
 
 **Cause:** All the AMD fast paths (aiter Flash Attention, aiter RMSNorm, AWQ Marlin) are unavailable on gfx1151 today. SGLang falls back to Triton attention + native PyTorch RMSNorm, which are correct but slower than Ollama's hand-tuned llama.cpp HIP kernels.
 
-**Where SGLang still wins:** continuous batching. At 8 concurrent streams, SGLang aggregate is 12.7× Ollama (see [`bench/results.md`](../bench/results.md)). For multi-user / multi-agent workloads SGLang wins decisively; for solo single-stream use Ollama is faster today.
+**Where SGLang still wins:** continuous batching — at 8 concurrent streams SGLang's aggregate throughput is many times Ollama's serialized rate (see [`bench/results.md`](../bench/results.md)). For multi-user / multi-agent workloads SGLang wins decisively; for solo single-stream use Ollama is faster today.
 
-Fix (upstream, in order of impact): aiter RDNA RMSNorm path, aiter wave32 CK templates for MHA, AWQ-MoE kernel page-fault fix.
+Fix (upstream, in order of impact): aiter RDNA RMSNorm path, aiter wave32 CK templates for MHA.

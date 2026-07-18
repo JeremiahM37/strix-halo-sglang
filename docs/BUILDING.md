@@ -28,14 +28,14 @@ The build takes ~10 minutes on first run, mostly spent compiling `sgl-kernel` fo
 ## What the build does
 
 1. Pulls `kyuz0/vllm-therock-gfx1151:stable` (PyTorch 2.13 + ROCm 7.13 + AITER, gfx1151-compiled).
-2. Clones SGLang `main`.
-3. Applies the three patches in [`patches/`](../patches/).
+2. Fetches SGLang at the commit pinned by `SGL_BRANCH` in the Dockerfile (unpinned `main` drifts — that's what broke fresh builds in issue #5).
+3. Applies the four patches in [`patches/`](../patches/).
 4. Compiles `sgl-kernel` with `AMDGPU_TARGET=gfx1151 python3 setup_rocm.py develop`.
 5. Installs SGLang via `pyproject_other.toml` + `srt_hip` extra (avoids the NVIDIA-only PyPI wheels).
 
 ## Customizing
 
-- **SGLang version:** `--build-arg SGL_BRANCH=v0.5.11` (default: `main`)
+- **SGLang version:** `--build-arg SGL_BRANCH=<branch|tag|commit SHA>` (default: the pinned commit in the Dockerfile, verified against this base image)
 - **SGLang fork:** `--build-arg SGL_REPO=https://github.com/your/fork.git`
 - **Base image:** `--build-arg BASE_IMAGE=<registry>/kyuz0/vllm-therock-gfx1151:stable` (default: `kyuz0/vllm-therock-gfx1151:stable`). Use this to pull the base from a registry mirror when Docker Hub is unreachable — see [Troubleshooting](#troubleshooting) below.
 
