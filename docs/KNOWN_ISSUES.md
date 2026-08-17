@@ -64,4 +64,4 @@ Mitigation: use `--attention-backend triton`.
 
 **Where SGLang still wins:** continuous batching — at 8 concurrent streams SGLang's aggregate throughput is many times Ollama's serialized rate (see [`bench/results.md`](../bench/results.md)). For multi-user / multi-agent workloads SGLang wins decisively; for solo single-stream use Ollama is faster today.
 
-Fix (upstream, in order of impact): aiter RDNA RMSNorm path, aiter wave32 CK templates for MHA.
+Fix (upstream, in measured order of impact): aiter wave32 CK templates for MHA, then the int4 MoE GEMM, then an RDNA RMSNorm path. That ordering is empirical, not intuitive — a fused RMSNorm is worth only ~2% at decode (it is worth 8× at prefill shapes), CUDA graphs are worth nothing, and shrinking the MoE `BLOCK_SIZE_M` to fit decode makes things slightly *worse*. See the "three hypotheses, all negative" table in [`bench/results.md`](../bench/results.md) before spending time here.

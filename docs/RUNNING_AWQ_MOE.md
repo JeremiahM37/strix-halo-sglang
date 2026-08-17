@@ -37,7 +37,7 @@ docker run -d --name sglang-awq \
 | `--max-total-tokens 4096` | SGLang sizes its KV pool from `torch.cuda.mem_get_info` on AMD, which reports the GTT-inclusive total (~115 GB on Strix Halo) rather than the actual PyTorch-allocatable cap (~61.7 GB). Without an explicit cap, it requests an oversized pool and OOMs during pool init. Cap at a value comfortably under the cap. |
 | `--max-mamba-cache-size 32` | Qwen 3.5 A3B is a hybrid attention + mamba model. The default `max_mamba_cache_size=591` allocates a 35 GB SSM state pool that, combined with model weights (23 GB), leaves no room for KV cache. 32 entries is plenty for typical workloads. |
 | `--mem-fraction-static 0.55` | Together with the token cap, this gives the model + mamba + KV pool enough headroom on a 61.7 GB GPU. |
-| `--disable-cuda-graph` | CUDA graphs don't currently help on gfx1151 — the bottleneck is in-kernel — and they consume extra memory. Drop them to free room for KV cache. |
+| `--disable-cuda-graph` | Optional. CUDA graphs don't help on gfx1151 — measured 23.1 tps with graphs vs 23.4 without, i.e. noise — because the bottleneck is in-kernel and per-op dispatch is already hidden behind GPU execution. They are cheaper than this table used to claim (capture takes 8 s and 0.60 GB, not "extra memory" worth worrying about), so keep them if you like; drop them only if you are tight on a small GTT pool. |
 | `--attention-backend triton` | aiter's flash-attention path uses CDNA-only Composable Kernel templates (wave64 assumptions). Triton fallback works correctly. |
 
 `SGLANG_FORCE_NATIVE_LAYERNORM=1` is set in the image; it skips aiter's CDNA-only inline-asm RMSNorm.

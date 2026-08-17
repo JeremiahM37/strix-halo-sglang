@@ -55,6 +55,12 @@ prompt_tokens=16  completion_tokens=50  finish_reason=length
 
 GPU memory after load: 22.84 GB on a 61.7 GB GTT pool — matches the expected size for 4-bit 35B weights.
 
-## Why downstream only
+## Why this form lives downstream
 
-The bug is real for every wave32 ROCm target (gfx1100/1101/1102/1151/1200/1201) — same `WARP_SIZE` reliance, same fault. The fix is small and a no-op on CUDA / CDNA. But `sgl-kernel/setup_rocm.py` explicitly guards against anything other than `gfx942`/`gfx950` ("Unsupported GPU architecture detected"), so SGLang isn't accepting consumer-RDNA fixes — supporting wave32 would expand their support surface to consumer SKUs they don't test. An attempted upstream PR ([#25175](https://github.com/sgl-project/sglang/pull/25175)) was auto-closed by CI in minutes. The fix lives here instead.
+The bug is real for every wave32 ROCm target (gfx1100/1101/1102/1151/1200/1201) — same `WARP_SIZE` reliance, same fault. The fix is small and a no-op on CUDA / CDNA.
+
+**Upstream status.** A root-cause version is open at [sgl-project/sglang#28097](https://github.com/sgl-project/sglang/pull/28097) ("[AMD] sgl-kernel: fix host-side WARP_SIZE on wave32 targets, allow gfx1151 build"), opened 2026-06-12. Rather than renaming the identifier in two kernels, it fixes the source: `sgl-kernel/include/utils.h` hardcodes `WARP_SIZE 64` in the host pass, so the PR threads an `SGL_KERNEL_WAVE_SIZE` build define from `setup_rocm.py` and bundles the gfx1151 arch-guard change. As of 2026-08-16 it has had no human review.
+
+An earlier attempt ([#25175](https://github.com/sgl-project/sglang/pull/25175)) was **self-closed 13 minutes after opening**, when the formatting lint went red — no maintainer had looked at it. Previous revisions of this file described that as the project rejecting consumer-RDNA fixes; that was wrong, and the record shows no such rejection. Maintainer HaiShaw has since indicated on [#26867](https://github.com/sgl-project/sglang/issues/26867) that broader hardware support is targeted for Q3.
+
+This repo keeps the narrower `kStrixWarp` form so the image builds and runs today regardless of what upstream does.

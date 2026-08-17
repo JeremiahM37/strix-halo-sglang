@@ -4,15 +4,44 @@ All runs on **AMD Ryzen AI Max+ 395 / Radeon 8060S (gfx1151)**, ROCm 7.13 nightl
 
 ## Concurrent throughput — Qwen3.5-4B
 
+> ⚠️ **Withdrawn 2026-08-16 — the Ollama baseline in this section is contaminated.**
+> It was measured while the GPU was busy with SGLang work. Both engines share a single
+> iGPU, and this harness benches them back-to-back against a live SGLang server, so any
+> SGLang activity that overlaps the Ollama phase (server warm-up, TunableOp autotuning,
+> CUDA-graph capture) lands directly in the Ollama numbers. See
+> [Contamination postmortem](#contamination-postmortem-2026-08-16) for the reproduction.
+> The SGLang column has not been re-run either and is provisional. Treat the
+> [35B MoE section](#concurrent-throughput--qwen3535b-a3b-moe-a3b--33b-active) as the
+> reference result until this is re-measured cleanly.
+
 Same model on both engines (`qwen3.5:4b` on Ollama, `Qwen/Qwen3.5-4B` on SGLang). 80-token generations, identical prompts. SGLang numbers are warm-cache (TunableOp results already tuned).
 
-| Concurrent streams | Ollama agg tps | strix-halo-sglang agg tps | per-stream tps (SGLang) | SGLang advantage |
-|---:|---:|---:|---:|---:|
-| 1 | 9.0 | 23.1 | 23.1 | 2.57× |
-| 4 | 9.3 | 85.8 | 21.4 | 9.23× |
-| 8 | 9.2 | 159.9 | 20.0 | **17.4×** |
+| Concurrent streams | Ollama agg tps (contaminated) | Ollama agg tps (clean re-run) | strix-halo-sglang agg tps | per-stream tps (SGLang) | SGLang advantage (provisional) |
+|---:|---:|---:|---:|---:|---:|
+| 1 | ~~9.0~~ | 43.3 | 23.1 | 23.1 | 0.53× |
+| 4 | ~~9.3~~ | 44.6 | 85.8 | 21.4 | 1.92× |
+| 8 | ~~9.2~~ | 45.1 | 159.9 | 20.0 | **3.55×** |
 
-**Reading:** Ollama serializes — 8 concurrent streams yield the same aggregate as 1 stream. SGLang's continuous batching keeps per-stream throughput nearly flat (23.1 → 20.0 tps, 13% drop) while aggregate scales near-linearly.
+The clean Ollama column was re-measured 2026-08-16 with the same script, same model tag, and the same Ollama build (binary dated 2026-04-10 — the version did not change between runs), on an otherwise-idle GPU. The advantage column mixes an August Ollama run with a May SGLang run and is therefore provisional; a same-session re-run of both engines is the fix.
+
+**Reading:** Ollama serializes — 8 concurrent streams yield the same aggregate as 1 stream (43.3 → 45.1). That part held up. What changed is the level: Ollama's serialized rate is ~45 agg tps, not ~9, so SGLang's concurrency win on this model is ~3.5×, in line with the 3.35× measured on the 35B MoE — not 17.4×. SGLang's continuous batching still keeps per-stream throughput nearly flat (23.1 → 20.0 tps, 13% drop) while aggregate scales near-linearly. And Ollama's single-stream win is now unambiguous: at 1 stream it is **1.9× faster** than SGLang here, consistent with the single-stream decode table below.
+
+### Contamination postmortem (2026-08-16)
+
+The tell was internal inconsistency: Ollama at 9.0 tps on a 4-bit 4.7B dense model while scoring 37.8 tps on a 4-bit 35B-A3B MoE (3.3B active) in the section below. Those two cannot both be right — the MoE has fewer active parameters per token but not 4× fewer bytes to stream.
+
+Reproduction, all on the same box with the same script and model:
+
+| Condition | Ollama agg tps @ 1 | @ 8 |
+|---|---:|---:|
+| Idle GPU | 43.3 | 45.1 |
+| 20 GB of GTT held by another process | 43.7 | 45.3 |
+| Another process issuing continuous matmuls | **10.9** | **11.0** |
+| *Originally recorded in this file* | *9.0* | *9.2* |
+
+Memory pressure is not the mechanism — with 20 GB of GTT held elsewhere, Ollama still reports the model fully GPU-resident (`size_vram == size`) and loses nothing. **Compute contention is:** a second process actively using the iGPU reproduces the recorded numbers to within ~20%, including the flat-across-concurrency shape.
+
+Lesson for anyone re-running this: on a single-GPU box, benchmark one engine at a time and stop the other engine's server first. `concurrent_throughput.py` requires both endpoints to be live, which makes it easy to start the SGLang server and begin benchmarking before its warm-up, autotuning, and graph capture have quiesced — the Ollama phase runs first, so it absorbs all of it.
 
 ### Tuning history (Qwen3.5-4B, 8 concurrent)
 
@@ -56,11 +85,29 @@ Tested separately to see if they stack with the warm cache. None did — the war
 
 The MoE-tuning regression is interesting: the upstream `tuning_fused_moe_triton.py` benchmarks the full forward with random expert routing and picks a configuration that minimizes that wall-clock — but at decode time real models hit the kernel with a much smaller effective M than the tuner's synthetic uniform distribution implies. Larger tile sizes that look fast on synthetic traces just waste compute on padding in production. Would need topk-id-driven tuning (sgl-kernel ships `tuning_fused_moe_triton_sep.py` for this) to fix.
 
+### Single-stream gap: three hypotheses, all tested, all negative (2026-08-16)
+
+Same server, same warm TunableOp cache, same model, one variable at a time.
+
+| Hypothesis | Change tested | Result @ 1 stream | Verdict |
+|---|---|---:|---|
+| Eager RMSNorm is most of the gap | Fused Triton RMSNorm vs `forward_native`, microbenchmarked | would save ~0.9 ms of a ~43 ms token | **No** — 5.4% of decode even if made free |
+| Launch overhead is the gap | CUDA graphs on (`--cuda-graph-max-bs 4`) vs `--disable-cuda-graph` | 23.1 vs 23.4 tps | **No** — within noise |
+| MoE tiles are M-padded at decode | `BLOCK_SIZE_M` 64 → 16 for M ≤ 32 | 22.5 vs 23.1 tps | **No** — 2–5% *worse* |
+
+Notes on each:
+
+- **RMSNorm.** See [`rmsnorm_micro.py`](rmsnorm_micro.py) and [patch 2](../patches/02-layernorm-native-fallback.md). Real 1.6× win on the kernel at decode shapes, 8× at prefill shapes — but too small a slice of the token budget to move the headline.
+- **CUDA graphs.** Capture takes 8 s and costs **0.60 GB**, not the "extra memory" the run guide implied. They simply don't help: per-op dispatch is already hidden behind GPU execution, which is itself evidence the GPU is the bottleneck. `--disable-cuda-graph` in the AWQ run guide is therefore about memory headroom on smaller GTT pools, not throughput.
+- **MoE tile shape.** The default for `int4_w4a16` with M ≤ E is `BLOCK_SIZE_M=64`, so at decode ~63/64 of the M tile is padding — which looks like an obvious waste and isn't. Shrinking it doesn't help because the decode MoE GEMM is bound by streaming each active expert's int4 weights, and that traffic is identical at any M tile. Smaller tiles just cost occupancy. This independently explains the `-15%` synthetic-tuning regression above: the tuner was chasing the wrong axis, not merely mistuning it.
+
+**Where the gap actually is:** at 23 tps the model spends ~43 ms per token, while streaming 3.3 B active params at 4 bits (~1.65 GB) over ~240 GB/s implies a ~7 ms floor. Both engines are far off that roof; Ollama is ~1.6× closer. The remaining suspects are the attention path (Triton fallback, since aiter's CK templates assume wave64) and the int4 MoE GEMM itself. Those are kernel rewrites, not flags — which is the honest answer to "why not just tune it."
+
 Run with `--mem-fraction-static 0.55 --context-length 2048 --max-total-tokens 4096 --max-mamba-cache-size 32 --disable-cuda-graph` and `-v $TUNABLE_DIR:/root/.tunableop`; the SGLang server is sized to fit on a 61.7 GB GTT pool. See [docs/RUNNING_AWQ_MOE.md](../docs/RUNNING_AWQ_MOE.md) for a full guide.
 
 ## Single-stream decode — Qwen3.5-4B
 
-Same setup, sequential requests only.
+Same setup, sequential requests only. **Direction holds, magnitude is suspect** — Ollama's clean single-stream rate on this model is ~43 tps (see the postmortem above), so the 21.7–26.6 tps recorded here was likely measured under partial contention too. Ollama's win over SGLang is therefore probably *larger* than shown, not smaller. Pending re-run.
 
 | Workload | Ollama (median) | strix-halo-sglang (median) | Notes |
 |---|---:|---:|---|
