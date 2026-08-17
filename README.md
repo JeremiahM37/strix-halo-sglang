@@ -11,7 +11,7 @@ AMD's official `rocm/sgl-dev` images only target MI300/MI350 data-center GPUs. T
 | Server starts, loads model | ✅ |
 | Chat completion, tool calling | ✅ |
 | RadixAttention prefix caching | ✅ |
-| Continuous batching | ✅ — **3.35× Ollama at 8 concurrent streams** (Qwen3.5-35B-A3B) |
+| Continuous batching | ✅ — **4.72× Ollama at 8 concurrent streams** (Qwen3.5-35B-A3B, patches 7+8) |
 | Single-stream decode | ⚠️ Slower than Ollama — **0.91×** on the 35B MoE with [patches 7+8](patches/07-wna16-rocm-linear.md) (was 0.62×) |
 | Quantized dense layers | ✅ — int4 attention/projection layers **and `lm_head`** on RDNA via [patch 7](patches/07-wna16-rocm-linear.md) + [patch 8](patches/08-lmhead-compressed-tensors.md); upstream is Marlin-only (CUDA) |
 | AWQ-MoE inference | ✅ — Qwen3.5-35B-A3B-AWQ-4bit works end-to-end after [patch 4](patches/04-warp-size-wave32.md) |
@@ -120,11 +120,15 @@ Two more are documented but not part of the serving path:
 
 Reference result — the 35B MoE, same family on both engines (`qwen3.5:35b-a3b` GGUF vs `cyankiwi/Qwen3.5-35B-A3B-AWQ-4bit`):
 
-| Concurrent streams | Ollama tps | strix-halo-sglang tps | SGLang advantage |
-|---:|---:|---:|---:|
-| 1 | 37.8 | 23.4 | 0.62× |
-| 4 | 37.8 | 73.2 | 1.94× |
-| 8 | 39.1 | **131.1** | **3.35×** |
+| Concurrent streams | Ollama tps | SGLang, experts-only int4 | SGLang, **patches 7+8** | advantage |
+|---:|---:|---:|---:|---:|
+| 1 | 37.8 | 23.4 | **34.4** | 0.91× |
+| 4 | 37.8 | 73.2 | **96.1** | 2.54× |
+| 8 | 39.1 | 131.1 | **184.4** | **4.72×** |
+
+The middle column is the stock experts-only checkpoint every public release ships; the right
+column adds int4 dense layers and `lm_head`, which upstream cannot load on AMD at all. Bytes
+streamed per decode token drop 3.70 GB → 0.94 GB. Details: [`bench/results.md`](bench/results.md).
 
 Qwen3.5-4B, with the caveats below:
 
