@@ -12,7 +12,8 @@ AMD's official `rocm/sgl-dev` images only target MI300/MI350 data-center GPUs. T
 | Chat completion, tool calling | ✅ |
 | RadixAttention prefix caching | ✅ |
 | Continuous batching | ✅ — **3.35× Ollama at 8 concurrent streams** (Qwen3.5-35B-A3B) |
-| Single-stream decode | ⚠️ Slower than Ollama — 0.62× on the 35B MoE, ~0.53× on the 4B (no aiter Flash Attention or aiter RMSNorm on RDNA 3.5 yet) |
+| Single-stream decode | ⚠️ Slower than Ollama — 0.79× on the 35B MoE with [patch 7](patches/07-wna16-rocm-linear.md) (was 0.62×) |
+| Quantized dense layers | ✅ — int4 attention/projection layers on RDNA via [patch 7](patches/07-wna16-rocm-linear.md); upstream is Marlin-only (CUDA) |
 | AWQ-MoE inference | ✅ — Qwen3.5-35B-A3B-AWQ-4bit works end-to-end after [patch 4](patches/04-warp-size-wave32.md) |
 
 Tested on Fedora 43 host, ROCm 7.13 nightly, PyTorch 2.13.
@@ -102,6 +103,10 @@ Four small patches let SGLang run on gfx1151:
 4. **`sgl-kernel/csrc/moe/moe_topk_{softmax,sigmoid}_kernels.cu`** — fix host/device `WARP_SIZE` mismatch that caused `hipErrorLaunchFailure` → GPU page fault on the first MoE forward pass for any wave32 (RDNA 3.5) target. **This is the patch that unlocks AWQ-MoE inference on consumer Strix Halo.** A root-cause version of this fix, bundled with the gfx1151 arch guard, is upstream in [sgl-project/sglang#28097](https://github.com/sgl-project/sglang/pull/28097) (open); this repo carries the narrower downstream form so the image works today.
 
 All four are baked into the Dockerfile by default. See [`patches/`](patches/) for the diffs.
+
+Plus **patch 7**, which unlocks quantized *dense* layers on RDNA:
+
+7. **[`compressed_tensors_wNa16.py`](patches/07-wna16-rocm-linear.md)** — SGLang's int4 Linear path is Marlin-only and Marlin is CUDA-only, so on ROCm you can quantize a MoE's experts but not its attention/projection layers. This adds a ROCm branch using `gptq_gemm`. Combined with [`tools/quantize_nonexpert.py`](tools/quantize_nonexpert.py) it takes Qwen3.5-35B-A3B from 3.70 GB to **1.67 GB streamed per decode token** and single-stream from **23.4 → 29.7 tps (+27%)**. Apply with [`patches/patch_wna16_rocm.py`](patches/patch_wna16_rocm.py).
 
 Two more are documented but not part of the serving path:
 

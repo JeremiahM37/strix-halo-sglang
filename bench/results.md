@@ -165,6 +165,29 @@ fixed per-step overhead (~6.5 ms/token for SGLang vs ~4.4 ms for Ollama) rather 
 kernels — on a 43 ms 35B step that overhead is ~5%, not 20%. On a 0.6B model SGLang's decode
 step is ~90% GPU kernel time, so there is little dispatch overhead left to remove.
 
+### Acting on it — quantized dense layers (patch 7)
+
+Upstream, int4 dense Linear layers can't run on ROCm at all: `wNa16` is Marlin-only and Marlin is
+CUDA-only. [Patch 7](../patches/07-wna16-rocm-linear.md) adds a `gptq_gemm` path, and
+[`tools/quantize_nonexpert.py`](../tools/quantize_nonexpert.py) requantizes the bf16 non-expert
+weights of the existing checkpoint (they're already bf16 on disk, so no base model download).
+
+| Concurrent streams | experts-only int4 | + dense int4 | + dense & `in_proj` |
+|---:|---:|---:|---:|
+| 1 | 23.4 | 24.9 | **29.7** |
+| 4 | 72.4 | 79.7 | **97.8** |
+| 8 | 127.0 | 141.6 | **137.6** |
+
+Bytes per token: **3.70 GB → 1.67 GB**, now *below* Ollama's ~1.8 GB. Single-stream vs Ollama
+goes 0.62× → **0.79×**. Note the traffic argument stops being sufficient here — we now move fewer
+bytes than Ollama and are still slower, so what remains is the MoE kernel (~6× off its roof) and
+fixed per-step overhead, not dense-layer bandwidth.
+
+`lm_head` (another 1.02 GB/token) still has to stay bf16:
+`CompressedTensorsConfig.get_quant_method` returns `None` for `ParallelLMHead`, so a quantized
+head silently falls back to an unquantized parameter the checkpoint never fills — uninitialized
+logits, `!!!!` output. That's the next fix.
+
 **Implication:** matching llama.cpp single-stream on the 35B needs a checkpoint that
 quantizes `linear_attn` and `lm_head`, not engine tuning. No public release does — cyankiwi,
 `apolo13x/...w4a16`, `QuantTrio/...AWQ` and `btbtyler09/...GPTQ-4bit` were all checked at the
