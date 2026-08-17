@@ -181,6 +181,29 @@ rep(
 open(p, 'w').write(t)
 PYEOF
 
+# Patch 5 — MoE tuner writes config files the runtime never reads for int4 MoE.
+# The runtime keys its lookup on w2.shape[2] (`E, _, N = w2_shape`), but the tuner
+# halves N a second time when use_int4_w4a16 is set. For Qwen3.5-35B-A3B-AWQ-4bit
+# the tuner emits E=256,N=128,...int4_w4a16.json while the server looks up
+# E=256,N=256 — so tuning an AWQ/GPTQ MoE silently no-ops. See
+# patches/05-moe-tuner-n-mismatch.md.
+RUN python3 - <<'PYEOF'
+p = "/sgl-workspace/sglang/benchmark/kernels/fused_moe_triton/tuning_fused_moe_triton.py"
+t = open(p).read()
+old = """        N = shard_intermediate_size // 2
+        if use_int4_w4a16:
+            N = N // 2
+"""
+new = """        N = shard_intermediate_size // 2
+        # gfx1151 patch 5: do NOT halve again for int4. The runtime keys its
+        # config lookup on w2.shape[2] without this extra shift, so halving here
+        # writes a filename the runtime will never open.
+"""
+assert old in t, "patch 5: upstream tuner N computation changed, re-check"
+open(p, "w").write(t.replace(old, new))
+print("patched", p)
+PYEOF
+
 # Compile sgl-kernel for gfx1151
 WORKDIR /sgl-workspace/sglang/sgl-kernel
 RUN AMDGPU_TARGET=gfx1151 python3 setup_rocm.py develop

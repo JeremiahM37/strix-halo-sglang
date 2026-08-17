@@ -105,6 +105,72 @@ Notes on each:
 
 Run with `--mem-fraction-static 0.55 --context-length 2048 --max-total-tokens 4096 --max-mamba-cache-size 32 --disable-cuda-graph` and `-v $TUNABLE_DIR:/root/.tunableop`; the SGLang server is sized to fit on a 61.7 GB GTT pool. See [docs/RUNNING_AWQ_MOE.md](../docs/RUNNING_AWQ_MOE.md) for a full guide.
 
+## What the single-stream gap actually is (2026-08-16)
+
+Short version: **it is bytes per token, not the engine.** The 35B comparison above pairs a
+checkpoint that quantizes only the routed experts against a GGUF that quantizes everything,
+so it measures checkpoints more than it measures SGLang vs llama.cpp.
+
+### Kernel-level profile
+
+`rocprofv3 --kernel-trace --stats` over 400 decode tokens (torch/kineto reports no GPU
+activity in this build — use rocprof, not the torch profiler):
+
+| Kernel | Share | Calls/step | µs/call | ms/token |
+|---|---:|---:|---:|---:|
+| `Cijk_...MT16x16x64` (rocBLAS GEMM) | 33.2% | 113 | 157.0 | 17.7 |
+| `fused_moe_kernel_gptq_awq` | 24.8% | 80 | 165.2 | 13.2 |
+| `Cijk_...MT32x16x128` | 6.7% | 52 | 68.3 | 3.6 |
+| `rocblas_gemvt` / `gemvn` | 2.5% | 109 | ~12 | 0.9 |
+| `fused_recurrent_gated_delta_rule` (GDN decode) | 1.1% | 30 | 20.1 | 0.6 |
+
+Those GEMMs are **not** badly chosen. Resolving the big dispatches against their operand
+sizes gives 165–197 GB/s of effective bandwidth — 70–82% of this APU's ~240 GB/s peak:
+
+| Dispatch | bf16 bytes | µs | Effective BW |
+|---|---:|---:|---:|
+| `lm_head` (248320×2048) | 1.02 GB | 5147 | 197 GB/s |
+| `linear_attn.in_proj_qkv` (12288×2048) ×30 | 50 MB | 276 | 182 GB/s |
+| 2048×2048 projections ×80 | 8.4 MB | 51 | 165 GB/s |
+
+### Bytes per token
+
+The AWQ checkpoint's `quantization_config.ignore` list excludes `lm_head`, every
+`self_attn.*`, every `linear_attn.in_proj_*` and every `mlp.shared_expert.*` — all bf16.
+Only the routed experts are int4:
+
+| Component | Precision | Per token |
+|---|---|---:|
+| Routed experts | int4 | 0.50 GB |
+| `linear_attn.in_proj_qkv` ×30 | bf16 | 1.51 GB |
+| `lm_head` | bf16 | 1.02 GB |
+| self_attn / shared_expert / out_proj | bf16 | 0.67 GB |
+| **Total** | | **3.70 GB** |
+
+Ollama's Q4_K_M moves roughly 1.8 GB for the same token. Traffic ratio 2.06×; measured
+speed ratio 1.62×.
+
+### Precision-matched engine test
+
+Same model (`Qwen3-0.6B`), same precision (bf16 on SGLang, fp16 GGUF on Ollama), one engine
+resident at a time:
+
+| Concurrent streams | Ollama fp16 | strix-halo-sglang bf16 | SGLang advantage |
+|---:|---:|---:|---:|
+| 1 | 106.3 | 87.1 | 0.82× |
+| 8 | 185.6 | **725.7** | **3.91×** |
+
+With the bits matched, the single-stream gap falls from 1.62× to 1.22×, and the residual is
+fixed per-step overhead (~6.5 ms/token for SGLang vs ~4.4 ms for Ollama) rather than slower
+kernels — on a 43 ms 35B step that overhead is ~5%, not 20%. On a 0.6B model SGLang's decode
+step is ~90% GPU kernel time, so there is little dispatch overhead left to remove.
+
+**Implication:** matching llama.cpp single-stream on the 35B needs a checkpoint that
+quantizes `linear_attn` and `lm_head`, not engine tuning. No public release does — cyankiwi,
+`apolo13x/...w4a16`, `QuantTrio/...AWQ` and `btbtyler09/...GPTQ-4bit` were all checked at the
+tensor level and all quantize only `mlp.experts.*`, regardless of what their `ignore` fields
+claim. See [patch 6](../patches/06-gptq-moe-rocm.md).
+
 ## Single-stream decode — Qwen3.5-4B
 
 Same setup, sequential requests only. **Direction holds, magnitude is suspect** — Ollama's clean single-stream rate on this model is ~43 tps (see the postmortem above), so the 21.7–26.6 tps recorded here was likely measured under partial contention too. Ollama's win over SGLang is therefore probably *larger* than shown, not smaller. Pending re-run.
