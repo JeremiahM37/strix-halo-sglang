@@ -172,21 +172,55 @@ CUDA-only. [Patch 7](../patches/07-wna16-rocm-linear.md) adds a `gptq_gemm` path
 [`tools/quantize_nonexpert.py`](../tools/quantize_nonexpert.py) requantizes the bf16 non-expert
 weights of the existing checkpoint (they're already bf16 on disk, so no base model download).
 
-| Concurrent streams | experts-only int4 | + dense int4 | + dense & `in_proj` |
-|---:|---:|---:|---:|
-| 1 | 23.4 | 24.9 | **29.7** |
-| 4 | 72.4 | 79.7 | **97.8** |
-| 8 | 127.0 | 141.6 | **137.6** |
+| Concurrent streams | experts-only int4 | + dense int4 | + `in_proj` | + `lm_head` (patch 8) | + MoE tiles | Ollama |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 23.4 | 24.9 | 29.7 | 33.4 | **34.4** | 37.8 |
+| 4 | 72.4 | 79.7 | 97.8 | 94.6 | **96.1** | 37.8 |
+| 8 | 127.0 | 141.6 | 137.6 | 180.8 | **184.4** | 39.1 |
 
-Bytes per token: **3.70 GB → 1.67 GB**, now *below* Ollama's ~1.8 GB. Single-stream vs Ollama
-goes 0.62× → **0.79×**. Note the traffic argument stops being sufficient here — we now move fewer
-bytes than Ollama and are still slower, so what remains is the MoE kernel (~6× off its roof) and
+Bytes per token: **3.70 GB → 0.94 GB**, about half of Ollama's ~1.8 GB. Single-stream vs Ollama
+goes 0.62× → **0.91×**; 8-stream goes 3.35× → **4.72×**. Net single-stream gain **+47%**.
+
+### MoE tiles: it's workgroup count, not the M tile
+
+Revisiting the earlier failed tile experiments with the dense layers now quantized: shrinking
+`BLOCK_SIZE_M` never helped because at decode `tiles_m == 1` either way, so it changes no
+parallelism. `BLOCK_SIZE_N` is the knob that does — it sets how many workgroups launch, and with
+`BSN=128` there are only ~64 of them across a 40-CU GPU, far too few to saturate bandwidth.
+
+| Config (single stream, same harness) | tps |
+|---|---:|
+| `BSM=64 BSN=128` (upstream default) | 16.3 |
+| `BSM=16 BSN=64` | 34.2 |
+| `BSM=16 BSN=32` | **34.3** |
+| `BSM=16 BSN=64 num_warps=8` | 28.5 |
+
+Re-measured properly with `concurrent_throughput.py`, `BSN=32` gives 34.4 vs 33.4 tps. Config
+lives at `E=256,N=256,device_name=Radeon_8060S_Graphics,dtype=int4_w4a16{,_down}.json`.
+
+### What's left, and why we stopped
+
+29.1 ms/token vs Ollama's 26.5 ms — a ~2.6 ms gap, which matches the ~2 ms fixed per-step
+overhead measured independently on Qwen3-0.6B. Part of it is self-inflicted: patch 7 casts
+bf16→fp16 on every Linear call (~200/step) because `gptq_gemm` returns garbage in bf16. Running
+the model natively in `--dtype float16` would remove those casts but fails to compile — a Triton
+kernel in the GDN/MoE path hard-codes bf16:
+
+```
+triton.compiler.errors.CompilationError:
+AssertionError("Mismatched type for col0 between then block (bf16) and else block (fp16)")
+```
+
+So the remaining gap is engine overhead, not bandwidth or kernel selection.
+
+Note the traffic argument stops being sufficient here — we now move *fewer* bytes than Ollama and
+are still slower single-stream, so what remains is the MoE kernel (~6× off its bandwidth roof) and
 fixed per-step overhead, not dense-layer bandwidth.
 
-`lm_head` (another 1.02 GB/token) still has to stay bf16:
+`lm_head` needed [patch 8](../patches/08-lmhead-compressed-tensors.md):
 `CompressedTensorsConfig.get_quant_method` returns `None` for `ParallelLMHead`, so a quantized
-head silently falls back to an unquantized parameter the checkpoint never fills — uninitialized
-logits, `!!!!` output. That's the next fix.
+head silently fell back to an unquantized parameter the checkpoint never fills — uninitialized
+logits, `!!!!` output. The checkpoint also has to list `lm_head` in `config_groups.*.targets`.
 
 **Implication:** matching llama.cpp single-stream on the 35B needs a checkpoint that
 quantizes `linear_attn` and `lm_head`, not engine tuning. No public release does — cyankiwi,

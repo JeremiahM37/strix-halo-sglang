@@ -152,6 +152,14 @@ def main():
 
     before_n = len(qc.get("ignore", []))
     qc["ignore"] = [e for e in qc.get("ignore", []) if still_ignored(e)]
+
+    # Scheme matching is by module class name or layer name, and ParallelLMHead matches
+    # neither "Linear" nor anything else by default -- without this the server raises
+    # "Unable to find matching target for lm_head". See patches/08-lmhead-compressed-tensors.md.
+    if any(n == "lm_head.weight" for n in quantized):
+        for grp in qc.get("config_groups", {}).values():
+            if "lm_head" not in grp.get("targets", []):
+                grp["targets"] = list(grp.get("targets", [])) + ["lm_head"]
     json.dump(cfg, open(os.path.join(args.dst, "config.json"), "w"), indent=2)
 
     for extra in ("tokenizer.json", "tokenizer_config.json", "generation_config.json",

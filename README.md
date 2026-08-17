@@ -12,8 +12,8 @@ AMD's official `rocm/sgl-dev` images only target MI300/MI350 data-center GPUs. T
 | Chat completion, tool calling | ✅ |
 | RadixAttention prefix caching | ✅ |
 | Continuous batching | ✅ — **3.35× Ollama at 8 concurrent streams** (Qwen3.5-35B-A3B) |
-| Single-stream decode | ⚠️ Slower than Ollama — 0.79× on the 35B MoE with [patch 7](patches/07-wna16-rocm-linear.md) (was 0.62×) |
-| Quantized dense layers | ✅ — int4 attention/projection layers on RDNA via [patch 7](patches/07-wna16-rocm-linear.md); upstream is Marlin-only (CUDA) |
+| Single-stream decode | ⚠️ Slower than Ollama — **0.91×** on the 35B MoE with [patches 7+8](patches/07-wna16-rocm-linear.md) (was 0.62×) |
+| Quantized dense layers | ✅ — int4 attention/projection layers **and `lm_head`** on RDNA via [patch 7](patches/07-wna16-rocm-linear.md) + [patch 8](patches/08-lmhead-compressed-tensors.md); upstream is Marlin-only (CUDA) |
 | AWQ-MoE inference | ✅ — Qwen3.5-35B-A3B-AWQ-4bit works end-to-end after [patch 4](patches/04-warp-size-wave32.md) |
 
 Tested on Fedora 43 host, ROCm 7.13 nightly, PyTorch 2.13.
@@ -104,9 +104,12 @@ Four small patches let SGLang run on gfx1151:
 
 All four are baked into the Dockerfile by default. See [`patches/`](patches/) for the diffs.
 
-Plus **patch 7**, which unlocks quantized *dense* layers on RDNA:
+Plus **patches 7 and 8**, which unlock quantized *dense* layers and `lm_head` on RDNA:
 
-7. **[`compressed_tensors_wNa16.py`](patches/07-wna16-rocm-linear.md)** — SGLang's int4 Linear path is Marlin-only and Marlin is CUDA-only, so on ROCm you can quantize a MoE's experts but not its attention/projection layers. This adds a ROCm branch using `gptq_gemm`. Combined with [`tools/quantize_nonexpert.py`](tools/quantize_nonexpert.py) it takes Qwen3.5-35B-A3B from 3.70 GB to **1.67 GB streamed per decode token** and single-stream from **23.4 → 29.7 tps (+27%)**. Apply with [`patches/patch_wna16_rocm.py`](patches/patch_wna16_rocm.py).
+7. **[`compressed_tensors_wNa16.py`](patches/07-wna16-rocm-linear.md)** — SGLang's int4 Linear path is Marlin-only and Marlin is CUDA-only, so on ROCm you can quantize a MoE's experts but not its attention/projection layers. Adds a ROCm branch using `gptq_gemm`. Apply with [`patches/patch_wna16_rocm.py`](patches/patch_wna16_rocm.py).
+8. **[`compressed_tensors.py`](patches/08-lmhead-compressed-tensors.md)** — `get_quant_method` returns `None` for `ParallelLMHead`, so a quantized `lm_head` silently falls back to an unquantized parameter the checkpoint never fills, producing uninitialized logits. Adds the dispatch. Apply with [`patches/patch_lmhead_rocm.py`](patches/patch_lmhead_rocm.py).
+
+Together with [`tools/quantize_nonexpert.py`](tools/quantize_nonexpert.py) they take Qwen3.5-35B-A3B from **3.70 GB to 0.94 GB streamed per decode token** — about half of Ollama's ~1.8 GB — and single-stream from **23.4 → 34.4 tps (+47%)**, 8-stream from 127.0 → **184.4 tps (+45%)**. That is **0.91× Ollama single-stream** (was 0.62×) and **4.72× at 8 concurrent** (was 3.35×).
 
 Two more are documented but not part of the serving path:
 
