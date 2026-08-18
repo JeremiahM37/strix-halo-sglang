@@ -178,7 +178,7 @@ weights of the existing checkpoint (they're already bf16 on disk, so no base mod
 | 4 | 72.4 | 79.7 | 97.8 | 94.6 | **124.2** | 37.8 |
 | 8 | 127.0 | 141.6 | 137.6 | 180.8 | **199.3** | 39.1 |
 
-Bytes per token: **3.70 GB → 1.69 GB** (measured from the checkpoint), just under Ollama's ~1.8 GB. Single-stream vs Ollama goes 0.62× → **1.05× (SGLang now wins)**; 8-stream 3.35× → **5.10×**. Net single-stream gain **+69%**.
+Bytes per token: **3.70 GB → 1.69 GB** (measured from the checkpoint), just under Ollama's ~1.8 GB. Net single-stream gain **+69%** (23.4 → 39.7). See the clean head-to-head below.
 
 ### MoE tiles: it's workgroup count, not the M tile
 
@@ -248,3 +248,39 @@ python3 bench/concurrent_throughput.py \
     --ollama http://<ollama-host>:11434/v1/chat/completions \
     --sglang http://<sglang-host>:30000/v1/chat/completions
 ```
+
+
+## Clean head-to-head, one engine at a time (2026-08-18)
+
+Both re-measured in a single session with the other engine's server stopped — the methodology the
+earlier contamination postmortem prescribes. Ollama model re-pulled (`qwen3.5:35b-a3b`).
+
+| Concurrent streams | Ollama | strix-halo-sglang | ratio |
+|---:|---:|---:|---:|
+| 1 | 37.6 | **39.7** | 1.06× |
+| 4 | 38.7 | **126.5** | 3.27× |
+| 8 | 38.9 | **185.1** | 4.76× |
+
+Ollama re-measured within 1% of the May baseline (37.8 / 37.8 / 39.1), which retroactively
+validates that figure.
+
+### ⚠️ Why this is parity, not a win
+
+The single-stream margin is **6%**, and the two sides are not quantization-matched:
+
+- **Ours:** every linear layer int4, group size 32, plain round-to-nearest. **21 GB** on disk,
+  1.69 GB streamed per token.
+- **Ollama:** Q4_K_M — mixed precision, mostly Q4_K with some tensors at Q6_K. **26.2 GB**
+  resident.
+
+So we move roughly 10–15% fewer bytes because we quantize harder, and we are roughly 6% faster.
+That is consistent with the speed difference being explained by the quantization choice rather
+than by the engine.
+
+**No quality evaluation has been done** — correctness checking stopped at "produces coherent text
+and gets 17 × 23 right." The quantizer reported up to **14% relative error** on one `v_proj`
+tensor. A perplexity comparison against the bf16 model, and against Ollama's Q4_K_M, is the
+missing piece before any performance claim here is meaningful.
+
+The concurrency result (4.76×) does not depend on this caveat: it is a scheduler property, and it
+holds regardless of how either side is quantized.
