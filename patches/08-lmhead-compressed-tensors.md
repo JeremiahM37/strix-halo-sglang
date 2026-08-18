@@ -80,6 +80,6 @@ Qwen3.5-35B-A3B, on top of [patch 7](07-wna16-rocm-linear.md), warm TunableOp:
 | 4 | 72.4 | 97.8 | 94.6 |
 | 8 | 127.0 | 137.6 | **180.8** |
 
-Bytes streamed per decode token: **3.70 GB → 0.94 GB**, about half of Ollama's ~1.8 GB.
+Bytes streamed per decode token: **3.70 GB → 1.69 GB** (measured from the checkpoint), just under Ollama's ~1.8 GB.
 Single-stream goes from 0.62× to **0.88×** of Ollama, and 8-stream from 3.35× to **4.62×**.
 Output verified coherent with correct arithmetic.

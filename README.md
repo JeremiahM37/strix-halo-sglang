@@ -11,8 +11,8 @@ AMD's official `rocm/sgl-dev` images only target MI300/MI350 data-center GPUs. T
 | Server starts, loads model | ✅ |
 | Chat completion, tool calling | ✅ |
 | RadixAttention prefix caching | ✅ |
-| Continuous batching | ✅ — **4.72× Ollama at 8 concurrent streams** (Qwen3.5-35B-A3B, patches 7+8) |
-| Single-stream decode | ⚠️ Slower than Ollama — **0.91×** on the 35B MoE with [patches 7+8](patches/07-wna16-rocm-linear.md) (was 0.62×) |
+| Continuous batching | ✅ — **5.10× Ollama at 8 concurrent streams** (Qwen3.5-35B-A3B, patches 7+8 + tuned MoE config) |
+| Single-stream decode | ✅ **1.05× Ollama** on the 35B MoE with [patches 7+8](patches/07-wna16-rocm-linear.md) + [tuned MoE config](configs/moe/) (was 0.62×) |
 | Quantized dense layers | ✅ — int4 attention/projection layers **and `lm_head`** on RDNA via [patch 7](patches/07-wna16-rocm-linear.md) + [patch 8](patches/08-lmhead-compressed-tensors.md); upstream is Marlin-only (CUDA) |
 | AWQ-MoE inference | ✅ — Qwen3.5-35B-A3B-AWQ-4bit works end-to-end after [patch 4](patches/04-warp-size-wave32.md) |
 
@@ -109,7 +109,7 @@ Plus **patches 7 and 8**, which unlock quantized *dense* layers and `lm_head` on
 7. **[`compressed_tensors_wNa16.py`](patches/07-wna16-rocm-linear.md)** — SGLang's int4 Linear path is Marlin-only and Marlin is CUDA-only, so on ROCm you can quantize a MoE's experts but not its attention/projection layers. Adds a ROCm branch using `gptq_gemm`. Apply with [`patches/patch_wna16_rocm.py`](patches/patch_wna16_rocm.py).
 8. **[`compressed_tensors.py`](patches/08-lmhead-compressed-tensors.md)** — `get_quant_method` returns `None` for `ParallelLMHead`, so a quantized `lm_head` silently falls back to an unquantized parameter the checkpoint never fills, producing uninitialized logits. Adds the dispatch. Apply with [`patches/patch_lmhead_rocm.py`](patches/patch_lmhead_rocm.py).
 
-Together with [`tools/quantize_nonexpert.py`](tools/quantize_nonexpert.py) they take Qwen3.5-35B-A3B from **3.70 GB to 0.94 GB streamed per decode token** — about half of Ollama's ~1.8 GB — and single-stream from **23.4 → 34.4 tps (+47%)**, 8-stream from 127.0 → **184.4 tps (+45%)**. That is **0.91× Ollama single-stream** (was 0.62×) and **4.72× at 8 concurrent** (was 3.35×).
+Together with [`tools/quantize_nonexpert.py`](tools/quantize_nonexpert.py) they take Qwen3.5-35B-A3B from **3.70 GB to 1.69 GB streamed per decode token** — just under Ollama's ~1.8 GB — and, with the [tuned MoE config](configs/moe/), single-stream from **23.4 → 39.6 tps (+69%)** and 8-stream from 127.0 → **199.3 tps (+52%)**. That is **1.05× Ollama single-stream** — SGLang now wins at every concurrency — and **5.10× at 8 concurrent**.
 
 Two more are documented but not part of the serving path:
 
@@ -122,13 +122,13 @@ Reference result — the 35B MoE, same family on both engines (`qwen3.5:35b-a3b`
 
 | Concurrent streams | Ollama tps | SGLang, experts-only int4 | SGLang, **patches 7+8** | advantage |
 |---:|---:|---:|---:|---:|
-| 1 | 37.8 | 23.4 | **34.4** | 0.91× |
-| 4 | 37.8 | 73.2 | **96.1** | 2.54× |
-| 8 | 39.1 | 131.1 | **184.4** | **4.72×** |
+| 1 | 37.8 | 23.4 | **39.6** | **1.05×** |
+| 4 | 37.8 | 73.2 | **124.2** | 3.29× |
+| 8 | 39.1 | 131.1 | **199.3** | **5.10×** |
 
 The middle column is the stock experts-only checkpoint every public release ships; the right
 column adds int4 dense layers and `lm_head`, which upstream cannot load on AMD at all. Bytes
-streamed per decode token drop 3.70 GB → 0.94 GB. Details: [`bench/results.md`](bench/results.md).
+streamed per decode token drop 3.70 GB → 1.69 GB. Details: [`bench/results.md`](bench/results.md).
 
 Qwen3.5-4B, with the caveats below:
 
