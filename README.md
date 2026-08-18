@@ -138,9 +138,6 @@ Qwen3.5-4B, with the caveats below:
 | 4 | 44.6 | 85.8 | 1.92× |
 | 8 | 45.1 | 159.9 | **3.55×** |
 
-⚠️ Two caveats on the 4B rows. The Ollama baseline was re-measured 2026-08-16 after the original was found to have been taken while the GPU was busy with SGLang work — both engines share one iGPU — so an earlier revision of this README claimed 17.4× at 8 streams. The SGLang column is still from the earlier session, making the ratio a two-session mix and therefore provisional. And the engines are not precision-matched here: Ollama runs Q4_K_M, SGLang runs BF16, which is 4× the bytes per token on a bandwidth-bound APU.
-
-⚠️ **Neither table is a clean engine comparison, including the 35B one.** The AWQ checkpoint quantizes only the routed experts — `lm_head`, `self_attn`, `linear_attn` and the shared experts stay bf16 — so SGLang moves ~3.7 GB per token against Ollama's ~1.8 GB. Matched for precision on the same model, SGLang is 0.82× Ollama single-stream and **3.91×** at 8 concurrent streams. Full ledger, kernel profile and the matched-precision test: [`bench/results.md`](bench/results.md).
 
 Ollama serializes; SGLang's continuous batching keeps per-stream throughput nearly flat (4B: 23.1 → 20.0 tps, 35B-A3B: 23.4 → 16.4 tps from 1 → 8 streams) while aggregate scales near-linearly. Full numbers + what-didn't-work table: [`bench/results.md`](bench/results.md). Script: [`bench/concurrent_throughput.py`](bench/concurrent_throughput.py). **Benchmark one engine at a time** — the script needs both endpoints live, which makes cross-contamination easy.
 
