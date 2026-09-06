@@ -234,7 +234,9 @@ RUN cp python/pyproject_other.toml python/pyproject.toml \
 # Unlocks Quark/MXFP4 checkpoints on gfx1151. Two blockers in the base image's aiter:
 #   1. is_fp4_avail() only whitelists gfx950 -> allow gfx1151.
 #   2. no gfx1151 GEMM configs; gfx950 configs need 100KB smem, RDNA3.5 only has 64KB.
-#      Copy gfx950 configs to gfx1151 and clamp BLOCK_SIZE_N/K<=128, num_stages<=2.
+#      Copy the FP4 gfx950 configs to gfx1151 with block sizes clamped to fit 64KB.
+# Every anchor is asserted: aiter lives in the base image, so CI cannot check it and
+# a layout change has to fail the build here rather than at the first FP4 request.
 # See patches/09-aiter-gfx1151-mxfp4.md
 COPY patches/fix_aiter_gfx1151_mxfp4.py /tmp/fix_aiter_gfx1151_mxfp4.py
 RUN python3 /tmp/fix_aiter_gfx1151_mxfp4.py && rm /tmp/fix_aiter_gfx1151_mxfp4.py

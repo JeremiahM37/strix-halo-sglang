@@ -15,7 +15,7 @@ AMD's official `rocm/sgl-dev` images only target MI300/MI350 data-center GPUs. T
 | Single-stream decode | ✅ **Parity with Ollama** (1.06×) on the 35B MoE with [patches 7+8](patches/07-wna16-rocm-linear.md) + [tuned MoE config](configs/moe/) — was 0.62×. See the quantization caveat in [`bench/results.md`](bench/results.md). |
 | Quantized dense layers | ✅ — int4 attention/projection layers **and `lm_head`** on RDNA via [patch 7](patches/07-wna16-rocm-linear.md) + [patch 8](patches/08-lmhead-compressed-tensors.md); upstream is Marlin-only (CUDA) |
 | AWQ-MoE inference | ✅ — Qwen3.5-35B-A3B-AWQ-4bit works end-to-end after [patch 4](patches/04-warp-size-wave32.md) |
-| MXFP4 (Quark) inference | ✅ — Quark/MXFP4 checkpoints load and serve after [patch 9](patches/09-aiter-gfx1151-mxfp4.md); e.g. `Qwen3.5-27B-Quark-AWQ-MXFP4` |
+| MXFP4 (Quark) inference | ✅ — Quark/MXFP4 checkpoints load and serve after [patch 9](patches/09-aiter-gfx1151-mxfp4.md); e.g. `Qwen3.5-27B-Quark-AWQ-MXFP4`. ⚠️ The generated gfx1151 GEMM configs are clamped to fit 64 KB of LDS, not tuned for it, and one model has been tried — treat it as working, not as fast. |
 
 Tested on Fedora 43 host, ROCm 7.13 nightly, PyTorch 2.13.
 
