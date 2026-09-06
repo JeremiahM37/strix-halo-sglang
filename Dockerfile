@@ -230,6 +230,52 @@ RUN cp python/pyproject_other.toml python/pyproject.toml \
     && PIP_CONSTRAINT=/tmp/rocm-constraints.txt pip install -e 'python[srt_hip]' --no-build-isolation \
     && (pip cache purge 2>/dev/null || true)
 
+# --- aiter gfx1151 MXFP4 fix (patch 9) ---
+# Unlocks Quark/MXFP4 checkpoints on gfx1151. Two blockers in the base image's aiter:
+#   1. is_fp4_avail() only whitelists gfx950 -> allow gfx1151.
+#   2. no gfx1151 GEMM configs; gfx950 configs need 100KB smem, RDNA3.5 only has 64KB.
+#      Copy gfx950 configs to gfx1151 and clamp BLOCK_SIZE_N/K<=128, num_stages<=2.
+# See patches/09-aiter-gfx1151-mxfp4.md
+RUN python3 - <<'PYEOF'
+import json, glob, os, shutil
+cfg = "/opt/venv/lib64/python3.12/site-packages/aiter/ops/triton/configs/gemm"
+os.makedirs(cfg, exist_ok=True)
+
+p = "/opt/venv/lib64/python3.12/site-packages/aiter/ops/triton/utils/_triton/arch_info.py"
+t = open(p).read()
+old = "def is_fp4_avail():\n    return get_arch() in (\"gfx950\")"
+new = "def is_fp4_avail():\n    return get_arch() in (\"gfx950\", \"gfx1151\")"
+assert old in t, "arch_info anchor not found"
+open(p, "w").write(t.replace(old, new))
+print("patched is_fp4_avail")
+
+created = adjusted = 0
+for f in glob.glob(f"{cfg}/gfx950-*.json"):
+    b = os.path.basename(f).replace("gfx950-", "gfx1151-", 1)
+    dst = os.path.join(cfg, b)
+    if not os.path.exists(dst):
+        shutil.copy(f, dst)
+        created += 1
+for f in glob.glob(f"{cfg}/gfx1151-*.json"):
+    try:
+        d = json.load(open(f))
+    except Exception:
+        continue
+    mod = False
+    for val in d.values():
+        if isinstance(val, dict):
+            if val.get("BLOCK_SIZE_N", 128) > 128:
+                val["BLOCK_SIZE_N"] = 128; mod = True
+            if val.get("BLOCK_SIZE_K", 128) > 128:
+                val["BLOCK_SIZE_K"] = 128; mod = True
+            if val.get("num_stages", 2) > 2:
+                val["num_stages"] = 2; mod = True
+    if mod:
+        json.dump(d, open(f, "w"), indent=2); adjusted += 1
+print(f"created {created} gfx1151 configs, adjusted {adjusted}")
+PYEOF
+# ------------------------------------------------
+
 # File-level verification (build host has no GPU; runtime check on container start).
 RUN test -f /sgl-workspace/sglang/sgl-kernel/python/sgl_kernel/common_ops*.so
 

@@ -15,6 +15,7 @@ AMD's official `rocm/sgl-dev` images only target MI300/MI350 data-center GPUs. T
 | Single-stream decode | ✅ **Parity with Ollama** (1.06×) on the 35B MoE with [patches 7+8](patches/07-wna16-rocm-linear.md) + [tuned MoE config](configs/moe/) — was 0.62×. See the quantization caveat in [`bench/results.md`](bench/results.md). |
 | Quantized dense layers | ✅ — int4 attention/projection layers **and `lm_head`** on RDNA via [patch 7](patches/07-wna16-rocm-linear.md) + [patch 8](patches/08-lmhead-compressed-tensors.md); upstream is Marlin-only (CUDA) |
 | AWQ-MoE inference | ✅ — Qwen3.5-35B-A3B-AWQ-4bit works end-to-end after [patch 4](patches/04-warp-size-wave32.md) |
+| MXFP4 (Quark) inference | ✅ — Quark/MXFP4 checkpoints load and serve after [patch 9](patches/09-aiter-gfx1151-mxfp4.md); e.g. `Qwen3.5-27B-Quark-AWQ-MXFP4` |
 
 Tested on Fedora 43 host, ROCm 7.13 nightly, PyTorch 2.13.
 
@@ -108,6 +109,10 @@ Plus **patches 7 and 8**, which unlock quantized *dense* layers and `lm_head` on
 
 7. **[`compressed_tensors_wNa16.py`](patches/07-wna16-rocm-linear.md)** — SGLang's int4 Linear path is Marlin-only and Marlin is CUDA-only, so on ROCm you can quantize a MoE's experts but not its attention/projection layers. Adds a ROCm branch using `gptq_gemm`. Apply with [`patches/patch_wna16_rocm.py`](patches/patch_wna16_rocm.py).
 8. **[`compressed_tensors.py`](patches/08-lmhead-compressed-tensors.md)** — `get_quant_method` returns `None` for `ParallelLMHead`, so a quantized `lm_head` silently falls back to an unquantized parameter the checkpoint never fills, producing uninitialized logits. Adds the dispatch. Apply with [`patches/patch_lmhead_rocm.py`](patches/patch_lmhead_rocm.py).
+
+Plus **patch 9**, which unlocks Quark/MXFP4 checkpoints on gfx1151:
+
+9. **[aiter gfx1151 MXFP4 fix](patches/09-aiter-gfx1151-mxfp4.md)** — aiter's `is_fp4_avail()` only whitelists `gfx950`, and no gfx1151 GEMM configs are shipped (the `gfx950` ones need 100 KB shared memory, RDNA 3.5 only has 64 KB). Baked into the Dockerfile: allows `gfx1151` and generates clamped `gfx1151-*.json` configs from the `gfx950` ones. Verified with `Qwen3.5-27B-Quark-AWQ-MXFP4` on a Ryzen AI Max+ 395.
 
 Together with [`tools/quantize_nonexpert.py`](tools/quantize_nonexpert.py) they take Qwen3.5-35B-A3B from **3.70 GB to 1.69 GB streamed per decode token** — just under Ollama's ~1.8 GB — and, with the [tuned MoE config](configs/moe/), single-stream from **23.4 → 39.6 tps (+69%)** and 8-stream from 127.0 → **199.3 tps (+52%)**. That brings single-stream to **parity with Ollama (1.06×)** and **4.76× at 8 concurrent**. Both engines re-measured in one session, one at a time. ⚠️ The single-stream margin is small and my checkpoint is quantized more aggressively than Ollama's Q4_K_M (21 GB vs 26 GB resident) with **no quality evaluation done** — treat it as parity, not a win.
 
