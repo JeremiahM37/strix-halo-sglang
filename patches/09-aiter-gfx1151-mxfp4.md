@@ -1,12 +1,10 @@
 # Patch 9 — enable Quark/MXFP4 (aiter FP4 GEMM) on gfx1151
 
 **Files:**
-- `python/sglang/...` — none (aiter lives in the base image at
-  `/opt/venv/lib64/python3.12/site-packages/aiter`)
-- Dockerfile: adds a `RUN` step that patches the **base image's** aiter installation at build time.
-
-**Apply with:** baked into the Dockerfile (see the `RUN python3 - <<'PYEOF'` step before the
-`common_ops` file check).
+- Dockerfile: adds a `COPY` + `RUN` step that patches the **base image's** aiter
+  installation at build time.
+- **Apply with:** [`fix_aiter_gfx1151_mxfp4.py`](fix_aiter_gfx1151_mxfp4.py) — baked into the
+  Dockerfile before the `common_ops` file check.
 
 ## What it unlocks
 
@@ -45,7 +43,7 @@ Two independent blockers in the **base image's** aiter (not in sglang itself):
    `gfx950` configs works, but their block sizes need **100 KB** of shared memory while RDNA 3.5
    (wave32) only exposes **64 KB**, producing `OutOfResources`.
 
-   The patch copies every `gfx950-*.json` to a `gfx1151-*.json` and clamps
+   The script copies every `gfx950-*.json` to a `gfx1151-*.json` and clamps
    `BLOCK_SIZE_N` / `BLOCK_SIZE_K` to ≤128 and `num_stages` to ≤2 so the kernel fits in 64 KB.
 
 ## Notes
@@ -53,7 +51,7 @@ Two independent blockers in the **base image's** aiter (not in sglang itself):
 - This is a runtime/layout heuristic fix: the Triton kernel is still JIT-compiled for the actual
   device, only the tuning knobs come from the config. The resulting kernels are correct but not
   benchmark-tuned for gfx1151.
-- Patch is idempotent (skips configs that already exist; `assert` guards the arch_info edit) so it
-  is safe to keep in the image on rebuilds.
+- The script is idempotent (skips configs that already exist; `assert` guards the arch_info edit)
+  so it is safe to keep in the image on rebuilds.
 - Verified with `Qwen3.5-27B-Quark-AWQ-MXFP4` on an AMD Ryzen AI Max+ 395 (gfx1151) — loads and
   serves (`200 OK`) end to end.
