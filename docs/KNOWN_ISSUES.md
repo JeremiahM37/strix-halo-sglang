@@ -15,6 +15,32 @@ Reason: Page not present or supervisor privilege.
 
 The crash appeared to be inside `fused_moe_kernel_gptq_awq` (`sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe_triton_kernels.py:91`) when called with `use_int4_w4a16=True` — but that attribution turned out to be wrong: the AWQ kernel never actually ran. The real fault was a failed launch of the topk gating softmax kernel (`__launch_bounds__` compiled for 128 threads, launched with 256) that poisoned the GPU command queue; the *next* kernel then page-faulted. Root-cause analysis in [patch 4](../patches/04-warp-size-wave32.md); the full debugging record is in [`AWQ_MOE_DEBUG.md`](AWQ_MOE_DEBUG.md).
 
+## An idle server pins a CPU core
+
+**Fixed for the SGLang side by [patch 10](../patches/10-sleep-on-idle-default.md)**, which is baked into the default build.
+
+**Symptom:** no requests, GPU idle, but one or two CPU cores at 100% and CPU temperature
+climbing. On a small Strix Halo box this can end in a thermal shutdown.
+
+Find out which thread is spinning before changing anything:
+
+```bash
+top -H -p "$(pgrep -f sglang::scheduler | head -1)"
+```
+
+- **`sglang::schedul`** — SGLang's scheduler busy-polling for requests. Patch 10 makes it
+  sleep while idle (1% CPU instead of 100%). Rebuild the image if you are on an older
+  build, or pass `--sleep-on-idle` to an old one.
+- **A thread inside `libhsa-runtime64`** (`gdb -p PID -batch -ex "thread apply all bt"`
+  shows `rocr::core::Runtime::AsyncEventsLoop`) — a ROCm runtime busy-spin, reported in
+  [ROCm/TheRock#7051](https://github.com/ROCm/TheRock/issues/7051) (ROCR 1.21, which this
+  image's base ships) and [ROCm/ROCm#6522](https://github.com/ROCm/ROCm/issues/6522)
+  (after a GPU queue eviction). SGLang cannot fix this one. We could not trigger it on
+  kernel 6.17; the reports are on Fedora kernels 6.18 and 7.1.
+
+A Strix Halo should not shut down from two busy cores. If it does, check the cooling as
+well — fan curve, dust, and the power limit set in the BIOS.
+
 ## aiter Flash Attention won't build on RDNA 3.5
 
 **Symptom:** Setting `--attention-backend aiter` triggers a JIT build that fails:
