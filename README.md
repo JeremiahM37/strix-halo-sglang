@@ -118,6 +118,10 @@ Together with [`tools/quantize_nonexpert.py`](tools/quantize_nonexpert.py) they 
 
 Two more are documented but not part of the serving path:
 
+Plus **patch 10**, which stops an idle server from spinning a CPU core:
+
+10. **[`server_args.py`](patches/10-sleep-on-idle-default.md)** — upstream's scheduler busy-polls for requests, pinning one core at 100% while the server is idle (Tctl 38 → 71 °C on a Ryzen AI Max+ 395). The image defaults `--sleep-on-idle` to on: idle CPU drops to 1%, with no measurable latency or throughput cost. `--no-sleep-on-idle` restores upstream behaviour.
+
 5. **[`benchmark/kernels/fused_moe_triton/tuning_fused_moe_triton.py`](patches/05-moe-tuner-n-mismatch.md)** — the MoE tuner halves `N` a second time for int4, so it writes config files the runtime never opens. Tuning an AWQ/GPTQ MoE silently no-ops. Fixed in the Dockerfile.
 6. **[GPTQ MoE on ROCm](patches/06-gptq-moe-rocm.md)** — `moe_wna16` is denied by a blanket ROCm list, and `gptq_gemm`/`gptq_shuffle` are imported only under `if _is_cuda`. Patching both makes a GPTQ MoE checkpoint load and serve on gfx1151, but generation is still numerically wrong, so this is **not** enabled by default.
 
@@ -151,6 +155,7 @@ The image enables TunableOp (`PYTORCH_TUNABLEOP_ENABLED=1`) by default — first
 ## Known limitations
 
 - **AWQ MoE page fault — fixed.** Early builds crashed on the first MoE forward pass; the cause was a host/device `WARP_SIZE` mismatch in the topk gating kernels, fixed by [patch 4](patches/04-warp-size-wave32.md) (baked into the default build). Qwen3.5-35B-A3B-AWQ-4bit now runs end-to-end — see [docs/RUNNING_AWQ_MOE.md](docs/RUNNING_AWQ_MOE.md). The debugging record lives in [docs/AWQ_MOE_DEBUG.md](docs/AWQ_MOE_DEBUG.md).
+- **Idle CPU spin — fixed for SGLang.** An idle server used to hold one core at 100%, fixed by [patch 10](patches/10-sleep-on-idle-default.md). A separate ROCm runtime spin (`AsyncEventsLoop`) can still pin a core on some kernels — see [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md#an-idle-server-pins-a-cpu-core).
 - **No aiter Flash Attention on gfx1151.** aiter's MHA kernels use Composable Kernel templates that assume wave64; gfx1151 is wave32. Falls back to Triton attention (slower).
 - **No aiter RMSNorm.** `rmsnorm_quant_kernels.cu` uses CDNA-only `v_pk_mul_f32` inline asm.
 - **CUDA graphs engage but the bottleneck is in-kernel.** Measured on the 35B: 23.1 tps with graphs vs 23.4 without — noise. Capture costs 8 s and 0.60 GB, so they are cheap, just not useful here.

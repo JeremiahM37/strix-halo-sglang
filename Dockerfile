@@ -230,6 +230,13 @@ RUN cp python/pyproject_other.toml python/pyproject.toml \
     && PIP_CONSTRAINT=/tmp/rocm-constraints.txt pip install -e 'python[srt_hip]' --no-build-isolation \
     && (pip cache purge 2>/dev/null || true)
 
+# --- idle scheduler sleeps instead of spinning a core (patch 10) ---
+# Upstream busy-polls its ZMQ sockets while idle, pinning one CPU core at 100%
+# forever (Tctl 38 -> 71 C on an idle Strix Halo). Default --sleep-on-idle to on;
+# --no-sleep-on-idle restores upstream behaviour. See patches/10-sleep-on-idle-default.md
+COPY patches/patch_sleep_on_idle.py /tmp/patch_sleep_on_idle.py
+RUN python3 /tmp/patch_sleep_on_idle.py && rm /tmp/patch_sleep_on_idle.py
+
 # --- aiter gfx1151 MXFP4 fix (patch 9) ---
 # Unlocks Quark/MXFP4 checkpoints on gfx1151. Two blockers in the base image's aiter:
 #   1. is_fp4_avail() only whitelists gfx950 -> allow gfx1151.

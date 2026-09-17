@@ -85,6 +85,14 @@ SOURCE_ANCHORS: dict[str, list[str]] = {
     ):
         return self.kernel.apply(layer, dispatch_output)''',
     ],
+    # Patch 10 — idle scheduler sleeps by default (patches/patch_sleep_on_idle.py)
+    "python/sglang/srt/server_args.py": [
+        "    sleep_on_idle: bool = False\n",
+        '''            "--sleep-on-idle",
+            action="store_true",
+            help="Reduce CPU usage when sglang is idle.",
+''',
+    ],
     # Dependency fix — the pin our build rewrites must still be the one present
     "python/pyproject_other.toml": ["compressed-tensors==0.15.0"],
 }
@@ -99,6 +107,8 @@ def main() -> int:
     check("SGLang pinned to an immutable ref (issue #5)", pinned, f"SGL_BRANCH={ref!r}")
     check("build relaxes compressed-tensors to >=0.16.0",
           "compressed-tensors>=0.16.0" in DOCKERFILE)
+    check("build applies patch 10 (sleep on idle by default)",
+          "patches/patch_sleep_on_idle.py" in DOCKERFILE)
     check("build freezes torch/torchvision via PIP_CONSTRAINT",
           "PIP_CONSTRAINT" in DOCKERFILE and "rocm-constraints.txt" in DOCKERFILE)
 
